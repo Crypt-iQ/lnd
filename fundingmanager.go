@@ -466,13 +466,8 @@ func (f *fundingManager) Start() error {
 				// one goroutine for sending fundinglocked
 				f.sendFundingLocked(channel, shortChanID, signalChan)
 			}()
-			go f.announceChannelAfterFundingLocked(doneChan, channel, signalChan)
 
-			select {
-			case <-f.quit:
-				//
-			case <-doneChan:
-			}
+			go f.announceChannelAfterFundingLocked(doneChan, channel, signalChan)
 
 		case fundingLockedSent:
 			fmt.Println("FLS")

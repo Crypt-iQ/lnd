@@ -123,6 +123,14 @@ type fundingErrorMsg struct {
 	peerAddress *lnwire.NetAddress
 }
 
+// signalAnnounceChannel couples an lnwallet.LightningChannel with an
+// lnwire.ShortChannelID.  The type is used to signal to the goroutine that
+// handles channel announcement that the fundingLocked message was sent.
+type signalAnnounceChannel struct {
+	channel	    *lnwallet.LightningChannel
+	shortChanID *lnwire.ShortChannelID
+}
+
 // pendingChannels is a map instantiated per-peer which tracks all active
 // pending single funded channels indexed by their pending channel identifier,
 // which is a set of 32-bytes generated via a CSPRNG.
@@ -361,6 +369,7 @@ func (f *fundingManager) Start() error {
 	// barriers and will also launch waitForFundingConfirmation to wait for
 	// the channel's funding transaction to be confirmed on the blockchain.
 	for _, channel := range pendingChannels {
+		fmt.Println("pend")
 		f.barrierMtx.Lock()
 		fndgLog.Tracef("Loading pending ChannelPoint(%v), creating chan "+
 			"barrier", channel.FundingOutpoint)
@@ -370,31 +379,38 @@ func (f *fundingManager) Start() error {
 
 		f.localDiscoverySignals[chanID] = make(chan struct{})
 
-		doneChan := make(chan struct{})
+		signalChan := make(chan *signalAnnounceChannel)
 		timeoutChan := make(chan struct{})
 
+		announceDoneChan := make(chan struct{})
+
 		go func(ch *channeldb.OpenChannel) {
-			go f.waitForFundingWithTimeout(ch, doneChan, timeoutChan)
+			// TODO - 305
+
+			go f.waitForFundingWithTimeout(ch, signalChan, timeoutChan)
+
+			// goroutine for channel announcements
+			go f.announceChannelAfterFundingLocked(announceDoneChan, ch, signalChan)
 
 			select {
 			case <-timeoutChan:
-				// Timeout waiting for the funding transaction
-				// to confirm, so we forget the channel and
-				// delete it from the database.
+			// Timeout waiting for the funding transaction
+			// to confirm, so we forget the channel and
+			// delete it from the database.
 				closeInfo := &channeldb.ChannelCloseSummary{
 					ChanPoint: ch.FundingOutpoint,
 					RemotePub: ch.IdentityPub,
 					CloseType: channeldb.FundingCanceled,
 				}
 				if err := ch.CloseChannel(closeInfo); err != nil {
-					fndgLog.Errorf("Failed closing channel "+
+					fndgLog.Errorf("Failed closing channel " +
 						"%v: %v", ch.FundingOutpoint, err)
 				}
 			case <-f.quit:
-				// The fundingManager is shutting down, and will
-				// resume wait on startup.
-			case <-doneChan:
-				// Success, funding transaction was confirmed.
+			// The fundingManager is shutting down, and will
+			// resume wait on startup.
+			case <-announceDoneChan:
+			// Success, channel was announced.
 			}
 		}(channel)
 	}
@@ -410,6 +426,7 @@ func (f *fundingManager) Start() error {
 	}
 
 	for _, channel := range openChannels {
+		fmt.Println("open")
 		channelState, shortChanID, err := f.getChannelOpeningState(
 			&channel.FundingOutpoint)
 		if err == ErrChannelNotFound {
@@ -431,25 +448,42 @@ func (f *fundingManager) Start() error {
 		// did not finish the rest of the setup procedure before we shut
 		// down. We handle the remaining steps of this setup by
 		// continuing the procedure where we left off.
+		fmt.Println(channelState)
 		switch channelState {
 		case markedOpen:
+			fmt.Println("MO")
 			// The funding transaction was confirmed, but we did not
 			// successfully send the fundingLocked message to the
 			// peer, so let's do that now.
+
+			signalChan := make(chan *signalAnnounceChannel)
+			doneChan := make(chan struct{})
+
 			f.wg.Add(1)
 			go func() {
 				defer f.wg.Done()
-				f.sendFundingLockedAndAnnounceChannel(channel,
-					shortChanID)
+				// TODO - 305
+				// one goroutine for sending fundinglocked
+				f.sendFundingLocked(channel, shortChanID, signalChan)
 			}()
+			go f.announceChannelAfterFundingLocked(doneChan, channel, signalChan)
+
+			select {
+			case <-f.quit:
+				//
+			case <-doneChan:
+			}
 
 		case fundingLockedSent:
+			fmt.Println("FLS")
 			// fundingLocked was sent to peer, but the channel
 			// announcement was not sent.
+
 			f.wg.Add(1)
 			go func() {
 				defer f.wg.Done()
-
+				// TODO - 305
+				// Wait 6 blocks?
 				lnChannel, err := lnwallet.NewLightningChannel(
 					nil, nil, f.cfg.FeeEstimator, channel)
 				if err != nil {
@@ -458,8 +492,8 @@ func (f *fundingManager) Start() error {
 				}
 				defer lnChannel.Stop()
 
-				f.sendChannelAnnouncement(channel, lnChannel,
-					shortChanID)
+				f.sendChannelAnnouncement(channel,
+					lnChannel, shortChanID)
 			}()
 
 		default:
@@ -467,6 +501,7 @@ func (f *fundingManager) Start() error {
 				channelState)
 		}
 	}
+	fmt.Println("nope")
 
 	f.wg.Add(1) // TODO(roasbeef): tune
 	go f.reservationCoordinator()
@@ -484,6 +519,7 @@ func (f *fundingManager) Stop() error {
 	fndgLog.Infof("Funding manager shutting down")
 
 	close(f.quit)
+
 	f.wg.Wait()
 
 	return nil
@@ -1057,24 +1093,35 @@ func (f *fundingManager) handleFundingCreated(fmsg *fundingCreatedMsg) {
 	// transaction in 288 blocks (~ 48 hrs), by canceling the reservation
 	// and canceling the wait for the funding confirmation.
 	go func() {
-		doneChan := make(chan struct{})
+		signalChan := make(chan *signalAnnounceChannel)
 		timeoutChan := make(chan struct{})
-		go f.waitForFundingWithTimeout(completeChan, doneChan,
-			timeoutChan)
+
+		announceDoneChan := make(chan struct{})
+
+		// TODO - 305
+
+		go f.waitForFundingWithTimeout(completeChan,
+			signalChan, timeoutChan)
+
+		// Another goroutine for channel announcement
+		go f.announceChannelAfterFundingLocked(announceDoneChan,
+			completeChan, signalChan)
 
 		select {
 		case <-timeoutChan:
-			// We did not see the funding confirmation before
-			// timeout, so we forget the channel.
+		// We did not see the funding confirmation before
+		// timeout, so we forget the channel.
 			cancelReservation()
 			deleteFromDatabase()
 		case <-f.quit:
-			// The fundingManager is shutting down, will resume
-			// wait for funding transaction on startup.
-		case <-doneChan:
-			// Success, funding transaction was confirmed.
+		// The fundingManager is shutting down, will resume
+		// wait for funding transaction on startup.
+		case <-announceDoneChan:
+		// Success, channel was announced
 			f.deleteReservationCtx(peerKey,
 				fmsg.msg.PendingChannelID)
+
+
 		}
 	}()
 }
@@ -1156,9 +1203,14 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 		},
 	}
 
+	// TODO - 305
+	// descriptions
 	go func() {
-		doneChan := make(chan struct{})
+		doneChan := make(chan struct {})
 		cancelChan := make(chan struct{})
+		signalChan := make(chan *signalAnnounceChannel)
+
+		announceDoneChan := make(chan struct {})
 
 		// In case the fundingManager is stopped at some point during
 		// the remaining part of the opening process, we must wait for
@@ -1167,14 +1219,19 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
-			f.waitForFundingConfirmation(completeChan, cancelChan,
-				doneChan)
+			// TODO - 305
+			f.waitForFundingConfirmation(completeChan,
+				doneChan, cancelChan, signalChan)
 		}()
+
+		// goroutine for channel announcement
+		go f.announceChannelAfterFundingLocked(announceDoneChan,
+			completeChan, signalChan)
 
 		select {
 		case <-f.quit:
 			return
-		case <-doneChan:
+		case <-announceDoneChan:
 		}
 
 		// Finally give the caller a final update notifying them that
@@ -1195,18 +1252,20 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 	}()
 }
 
+// TODO - 305
 // waitForFundingWithTimeout is a wrapper around waitForFundingConfirmation that
 // will cancel the wait for confirmation if maxWaitNumBlocksFundingConf has
 // passed from bestHeight. In the case of timeout, the timeoutChan will be
 // closed. In case of confirmation or error, doneChan will be closed.
+
+// TODO - 305
 func (f *fundingManager) waitForFundingWithTimeout(completeChan *channeldb.OpenChannel,
-	doneChan chan<- struct{}, timeoutChan chan<- struct{}) {
+	signalChan chan<- *signalAnnounceChannel, timeoutChan chan<- struct{}) {
 
 	epochClient, err := f.cfg.Notifier.RegisterBlockEpochNtfn()
 	if err != nil {
 		fndgLog.Errorf("unable to register for epoch notification: %v",
 			err)
-		close(doneChan)
 		return
 	}
 
@@ -1220,8 +1279,9 @@ func (f *fundingManager) waitForFundingWithTimeout(completeChan *channeldb.OpenC
 	f.wg.Add(1)
 	go func() {
 		defer f.wg.Done()
-		f.waitForFundingConfirmation(completeChan, cancelChan,
-			waitingDoneChan)
+		// TODO - 305
+		f.waitForFundingConfirmation(completeChan, waitingDoneChan,
+			cancelChan, signalChan)
 	}()
 
 	// On block maxHeight we will cancel the funding confirmation wait.
@@ -1252,20 +1312,21 @@ func (f *fundingManager) waitForFundingWithTimeout(completeChan *channeldb.OpenC
 			// waiting for the funding transaction on startup.
 			return
 		case <-waitingDoneChan:
-			close(doneChan)
 			return
 		}
 	}
 }
 
 // waitForFundingConfirmation handles the final stages of the channel funding
-// process once the funding transaction has been broadcast. The primary
-// function of waitForFundingConfirmation is to wait for blockchain
-// confirmation, and then to notify the other systems that must be notified
-// when a channel has become active for lightning transactions.
-// The wait can be canceled by closing the cancelChan.
+// process once the funding transaction has been broadcast. The primary functions
+// of waitForFundingConfirmation are to wait for blockchain confirmation, send
+// the fundingLocked message, add the channel to our internal channel graph, and
+// to notify a separate goroutine to start the channel announcement if the correct
+// number of confirmations have been reached.  The wait can be canceled by
+// closing the cancelChan.
 func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.OpenChannel,
-	cancelChan <-chan struct{}, doneChan chan<- struct{}) {
+	doneChan chan<- struct{}, cancelChan <-chan struct{},
+	signalChan chan<- *signalAnnounceChannel) {
 
 	defer close(doneChan)
 
@@ -1356,14 +1417,16 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 
 	// Now that the funding transaction has the required number of
 	// confirmations, we send the fundingLocked message to the peer.
-	f.sendFundingLockedAndAnnounceChannel(completeChan, &shortChanID)
+	f.sendFundingLocked(completeChan, &shortChanID, signalChan)
 }
 
-// sendFundingLockedAndAnnounceChannel creates and sends the fundingLocked
-// message, and then the channel announcement. This should be called after the
-// funding transaction has been confirmed, and the channelState is 'markedOpen'.
-func (f *fundingManager) sendFundingLockedAndAnnounceChannel(
-	completeChan *channeldb.OpenChannel, shortChanID *lnwire.ShortChannelID) {
+// sendFundingLocked creates and sends the fundingLocked message, and then
+// signals via signalChan to start the channel announcement process if possible.
+// This should be called after the funding transaction has been confirmed, and
+// the channelState is 'markedOpen'.
+func (f *fundingManager) sendFundingLocked(
+	completeChan *channeldb.OpenChannel, shortChanID *lnwire.ShortChannelID,
+	signalChan chan<- *signalAnnounceChannel) {
 
 	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
 
@@ -1375,7 +1438,9 @@ func (f *fundingManager) sendFundingLockedAndAnnounceChannel(
 		fndgLog.Errorf("error creating new lightning channel: %v", err)
 		return
 	}
-	defer channel.Stop()
+
+	// Note: we don't call `defer channel.Stop()` since we want it running
+	// when announceChannelAfterFundingLocked is called.
 
 	// Next, we'll send over the funding locked message which marks that we
 	// consider the channel open by presenting the remote party with our
@@ -1384,6 +1449,7 @@ func (f *fundingManager) sendFundingLockedAndAnnounceChannel(
 	nextRevocation, err := channel.NextRevocationKey()
 	if err != nil {
 		fndgLog.Errorf("unable to create next revocation: %v", err)
+		channel.Stop()
 		return
 	}
 	fundingLockedMsg := lnwire.NewFundingLocked(chanID, nextRevocation)
@@ -1391,6 +1457,7 @@ func (f *fundingManager) sendFundingLockedAndAnnounceChannel(
 	err = f.cfg.SendToPeer(completeChan.IdentityPub, fundingLockedMsg)
 	if err != nil {
 		fndgLog.Errorf("unable to send fundingLocked to peer: %v", err)
+		channel.Stop()
 		return
 	}
 
@@ -1403,11 +1470,36 @@ func (f *fundingManager) sendFundingLockedAndAnnounceChannel(
 	if err != nil {
 		fndgLog.Errorf("error setting channel state to "+
 			"fundingLockedSent: %v", err)
+		channel.Stop()
 		return
 	}
 
-	// TODO(roasbeef): wait 6 blocks before announcing
+	// We signal to another goroutine to start the channel announcement process,
+	// if and only if it has reached the correct number of confirmations.
+	signalChan <- &signalAnnounceChannel{channel: channel, shortChanID: shortChanID}
+}
 
+// TODO - 305
+func (f *fundingManager) announceChannelAfterFundingLocked(doneChan chan<- struct{},
+	completeChan *channeldb.OpenChannel, signalChan <-chan *signalAnnounceChannel) {
+
+	defer close(doneChan)
+
+	// Receive signal
+	signalAnn, ok := <-signalChan
+	if !ok {
+		// TODO - 305
+		return
+	}
+
+	channel := signalAnn.channel
+	shortChanID := signalAnn.shortChanID
+
+	defer channel.Stop()
+
+	// Wait 6 confirmations
+
+	// Send channel announcement
 	f.sendChannelAnnouncement(completeChan, channel, shortChanID)
 }
 

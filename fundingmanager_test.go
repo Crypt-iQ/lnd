@@ -271,9 +271,12 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 	alice.msgChan = aliceMsgChan
 	alice.announceChan = aliceAnnounceChan
 
+	fmt.Println("start")
 	if err = f.Start(); err != nil {
+		fmt.Println("start2")
 		t.Fatalf("failed starting fundingManager: %v", err)
 	}
+	fmt.Println("start3")
 }
 
 func setupFundingManagers(t *testing.T, shutdownChannel chan struct{}) (*testNode, *testNode) {
@@ -818,6 +821,7 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// We now recreate Alice's fundingManager, and expect it to retry
 	// sending the fundingLocked message.
 	recreateAliceFundingManager(t, alice)
+
 	time.Sleep(300 * time.Millisecond)
 
 	// Intetionally make the next channel announcement fail

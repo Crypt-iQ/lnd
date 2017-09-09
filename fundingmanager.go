@@ -656,6 +656,8 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	msg := fmsg.msg
 	amt := msg.FundingAmount
 
+	// TODO - #306 - channelFlags
+
 	// TODO(roasbeef): modify to only accept a _single_ pending channel per
 	// block unless white listed
 	if len(f.activeReservations[peerIDKey]) >= cfg.MaxPendingChannels {
@@ -1489,7 +1491,7 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 		return
 	}
 
-	// TODO - #305 - Add channel to ChannelRouter
+	// TODO - #305 - Add channel to ChannelRouter (new function / add Router)
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.
@@ -1535,7 +1537,7 @@ func (f *fundingManager) announceChannelAfterFundingLocked(doneChan chan<- struc
 		// we get a cancel signal, or the wallet signals a shutdown.
 		select {
 		case confDetails, ok = <-confNtfn.Confirmed:
-		// fallthroughs
+		// fallthrough
 		case <-f.quit:
 			fndgLog.Warnf("fundingManager shutting down, stopping funding " +
 				"flow for ChannelPoint(%v)", completeChan.FundingOutpoint)
@@ -1979,6 +1981,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		remoteAmt    = msg.remoteFundingAmt
 		capacity     = localAmt + remoteAmt
 		ourDustLimit = lnwallet.DefaultDustLimit()
+		channelFlags = msg.channelFlags
 	)
 
 	fndgLog.Infof("Initiating fundingRequest(localAmt=%v, remoteAmt=%v, "+
@@ -2064,6 +2067,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		PaymentPoint:         ourContribution.PaymentBasePoint,
 		DelayedPaymentPoint:  ourContribution.DelayBasePoint,
 		FirstCommitmentPoint: ourContribution.FirstCommitmentPoint,
+		ChannelFlags:	      channelFlags,
 	}
 	if err := f.cfg.SendToPeer(peerKey, &fundingOpen); err != nil {
 		fndgLog.Errorf("Unable to send funding request message: %v", err)

@@ -1299,6 +1299,8 @@ type openChanReq struct {
 
 	pushAmt lnwire.MilliSatoshi
 
+	channelFlags byte
+
 	// TODO(roasbeef): add ability to specify channel constraints as well
 
 	updates chan *lnrpc.OpenStatusUpdate

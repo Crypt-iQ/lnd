@@ -287,7 +287,7 @@ func setupFundingManagers(t *testing.T, shutdownChannel chan struct{}) (*testNod
 	estimator := lnwallet.StaticFeeEstimator{FeeRate: 250}
 
 	aliceMockNotifier := &mockNotifier{
-		confChannel: make(chan *chainntnfs.TxConfirmation, 1),
+		confChannel: make(chan *chainntnfs.TxConfirmation, 2),
 		epochChan:   make(chan *chainntnfs.BlockEpoch, 1),
 	}
 
@@ -323,7 +323,7 @@ func setupFundingManagers(t *testing.T, shutdownChannel chan struct{}) (*testNod
 	}
 
 	bobMockNotifier := &mockNotifier{
-		confChannel: make(chan *chainntnfs.TxConfirmation, 1),
+		confChannel: make(chan *chainntnfs.TxConfirmation, 2),
 		epochChan:   make(chan *chainntnfs.BlockEpoch, 1),
 	}
 
@@ -385,6 +385,7 @@ func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 		chainHash:       *activeNetParams.GenesisHash,
 		localFundingAmt: localFundingAmt,
 		pushAmt:         lnwire.NewMSatFromSatoshis(pushAmt),
+		channelFlags:	 1,
 		updates:         updateChan,
 		err:             errChan,
 	}
@@ -528,6 +529,8 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan)
 
 	// Notify that transaction was mined
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 
@@ -746,6 +749,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	}
 
 	// Notify that transaction was mined
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 

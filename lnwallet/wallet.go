@@ -107,6 +107,12 @@ type initFundingReserveMsg struct {
 	// the responder as part of the initial channel creation.
 	pushMSat lnwire.MilliSatoshi
 
+	// channelFlags is a flag set in the open_channel message that tells
+	// the peer whether this channel should be announced to the greater
+	// network or not.  An LSB of 1 indicates that the channel should be
+	// announced and an LSB of 0 indicates it shouldn't.
+	channelFlags byte
+
 	// err is a channel in which all errors will be sent across. Will be
 	// nil if this initial set is successful.
 	//
@@ -448,7 +454,7 @@ func (l *LightningWallet) InitChannelReservation(
 	capacity, ourFundAmt btcutil.Amount, pushMSat lnwire.MilliSatoshi,
 	feePerKw btcutil.Amount,
 	theirID *btcec.PublicKey, theirAddr *net.TCPAddr,
-	chainHash *chainhash.Hash) (*ChannelReservation, error) {
+	chainHash *chainhash.Hash, channelFlags byte) (*ChannelReservation, error) {
 
 	errChan := make(chan error, 1)
 	respChan := make(chan *ChannelReservation, 1)
@@ -461,6 +467,7 @@ func (l *LightningWallet) InitChannelReservation(
 		capacity:      capacity,
 		feePerKw:      feePerKw,
 		pushMSat:      pushMSat,
+		channelFlags:  channelFlags,
 		err:           errChan,
 		resp:          respChan,
 	}
@@ -491,7 +498,8 @@ func (l *LightningWallet) handleFundingReserveRequest(req *initFundingReserveMsg
 
 	id := atomic.AddUint64(&l.nextFundingID, 1)
 	reservation := NewChannelReservation(req.capacity, req.fundingAmount,
-		req.feePerKw, l, id, req.pushMSat, l.Cfg.NetParams.GenesisHash)
+		req.feePerKw, l, id, req.pushMSat, l.Cfg.NetParams.GenesisHash,
+		req.channelFlags)
 
 	// Grab the mutex on the ChannelReservation to ensure thread-safety
 	reservation.Lock()

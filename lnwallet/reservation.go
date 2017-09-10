@@ -136,7 +136,7 @@ type ChannelReservation struct {
 // lnwallet.InitChannelReservation interface.
 func NewChannelReservation(capacity, fundingAmt, feePerKw btcutil.Amount,
 	wallet *LightningWallet, id uint64, pushMSat lnwire.MilliSatoshi,
-	chainHash *chainhash.Hash) *ChannelReservation {
+	chainHash *chainhash.Hash, channelFlags byte) *ChannelReservation {
 
 	var (
 		ourBalance   lnwire.MilliSatoshi
@@ -215,6 +215,7 @@ func NewChannelReservation(capacity, fundingAmt, feePerKw btcutil.Amount,
 			RemoteBalance: theirBalance,
 			FeePerKw:      feePerKw,
 			CommitFee:     commitFee,
+			ChannelFlags:  channelFlags,
 		},
 		pushMSat:      pushMSat,
 		reservationID: id,

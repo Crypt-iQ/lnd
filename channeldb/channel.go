@@ -70,6 +70,7 @@ var (
 	commitFeePrefix    = []byte("cfp")
 	isPendingPrefix    = []byte("pdg")
 	confInfoPrefix     = []byte("conf-info")
+	channelFlagsPrefix = []byte("chf")
 
 	// chanIDKey stores the node, and channelID for an active channel.
 	chanIDKey = []byte("cik")
@@ -336,6 +337,12 @@ type OpenChannel struct {
 	// Htlcs is the list of active, uncleared HTLCs currently pending
 	// within the channel.
 	Htlcs []*HTLC
+
+	// ChannelFlags is a flag set in the open_channel message that tells
+	// the peer whether this channel should be announced to the greater
+	// network or not.  An LSB of 1 indicates that the channel should be
+	// announced and an LSB of 0 indicates it shouldn't.
+	ChannelFlags byte
 
 	// TODO(roasbeef): eww
 	Db *DB
@@ -1102,6 +1109,9 @@ func putOpenChannel(openChanBucket *bolt.Bucket, nodeChanBucket *bolt.Bucket,
 	if err := putChanCommitFee(openChanBucket, channel); err != nil {
 		return err
 	}
+	if err := putChanChannelFlags(openChanBucket, channel); err != nil {
+		return err
+	}
 
 	// Next, write out the fields of the channel update less frequently.
 	if err := putChannelIDs(nodeChanBucket, channel); err != nil {
@@ -1183,6 +1193,9 @@ func fetchOpenChannel(openChanBucket *bolt.Bucket, nodeChanBucket *bolt.Bucket,
 	if err = fetchChanCommitFee(openChanBucket, channel); err != nil {
 		return nil, err
 	}
+	if err = fetchChanChannelFlags(openChanBucket, channel); err != nil {
+		return nil, err
+	}
 
 	return channel, nil
 }
@@ -1211,6 +1224,9 @@ func deleteOpenChannel(openChanBucket *bolt.Bucket, nodeChanBucket *bolt.Bucket,
 		return err
 	}
 	if err := deleteChanCommitFee(openChanBucket, channelID); err != nil {
+		return err
+	}
+	if err := deleteChanChannelFlags(openChanBucket, channelID); err != nil {
 		return err
 	}
 
@@ -1536,6 +1552,45 @@ func deleteChanConfInfo(openChanBucket *bolt.Bucket, chanID []byte) error {
 	copy(keyPrefix[:len(confInfoPrefix)], confInfoPrefix)
 	copy(keyPrefix[len(confInfoPrefix):], chanID)
 	return openChanBucket.Delete(keyPrefix)
+}
+
+func putChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) error {
+	scratch := make([]byte, 1)
+
+	var b bytes.Buffer
+	if err := writeOutpoint(&b, &channel.FundingOutpoint); err != nil {
+		return err
+	}
+
+	keyPrefix := make([]byte, 3+b.Len())
+	copy(keyPrefix[3:], b.Bytes())
+	copy(keyPrefix[:3], channelFlagsPrefix)
+
+	// No need for byteOrder since this is a single byte
+	copy(scratch, channel.ChannelFlags)
+	return openChanBucket.Put(keyPrefix, scratch)
+}
+
+func deleteChanChannelFlags(openChanBucket *bolt.Bucket, chanID []byte) error {
+	keyPrefix := make([]byte, 3+len(chanID))
+	copy(keyPrefix[3:], chanID)
+	copy(keyPrefix[:3], channelFlagsPrefix)
+	return openChanBucket.Delete(keyPrefix)
+}
+
+func fetchChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) error {
+	var b bytes.Buffer
+	if err := writeOutpoint(&b, &channel.FundingOutpoint); err != nil {
+		return err
+	}
+
+	keyPrefix := make([]byte, 3+b.Len())
+	copy(keyPrefix[3:], b.Bytes())
+	copy(keyPrefix[:3], channelFlagsPrefix)
+
+	channel.ChannelFlags = openChanBucket.Get(keyPrefix)
+
+	return nil
 }
 
 func putChannelIDs(nodeChanBucket *bolt.Bucket, channel *OpenChannel) error {

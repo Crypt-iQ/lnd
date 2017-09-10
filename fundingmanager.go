@@ -728,7 +728,7 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	reservation, err := f.cfg.Wallet.InitChannelReservation(amt, 0,
 		msg.PushAmount, btcutil.Amount(msg.FeePerKiloWeight),
 		fmsg.peerAddress.IdentityKey, fmsg.peerAddress.Address,
-		&chainHash)
+		&chainHash, msg.ChannelFlags)
 	if err != nil {
 		// TODO(roasbeef): push ErrorGeneric message
 		fndgLog.Errorf("Unable to initialize reservation: %v", err)
@@ -2006,7 +2006,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 	// request will fail, and be aborted.
 	reservation, err := f.cfg.Wallet.InitChannelReservation(capacity,
 		localAmt, msg.pushAmt, feePerKw, peerKey,
-		msg.peerAddress.Address, &msg.chainHash)
+		msg.peerAddress.Address, &msg.chainHash, channelFlags)
 	if err != nil {
 		msg.err <- err
 		return

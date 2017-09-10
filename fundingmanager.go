@@ -1492,7 +1492,6 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 	}
 
 	// TODO - #305 - Add channel to ChannelRouter (new function / add Router)
-	fmt.Println(completeChan.ChannelFlags)
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.

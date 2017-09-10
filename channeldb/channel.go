@@ -1567,7 +1567,7 @@ func putChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) erro
 	copy(keyPrefix[:3], channelFlagsPrefix)
 
 	// No need for byteOrder since this is a single byte
-	flags := make([]byte, 1)
+	flags := make([]byte, 0)
 	flags = append(flags, channel.ChannelFlags)
 	copy(scratch[:], flags)
 	return openChanBucket.Put(keyPrefix, scratch)

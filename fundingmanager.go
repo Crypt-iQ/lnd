@@ -478,7 +478,40 @@ func (f *fundingManager) Start() error {
 			go func() {
 				defer f.wg.Done()
 
-				// TODO - #305 - Wait 6 blocks?
+				// The FundingLocked message has been sent.  However, we
+				// must wait 6 confirmations before we can send any announcements.
+				txid := channel.FundingOutpoint.Hash
+				var confNtfn *chainntnfs.ConfirmationEvent
+
+				// Note: this tx might already have 6 confirmations, so we
+				// are relying on `attemptHistoricalDispatch` to give us
+				// an immediate response.
+				confNtfn, err = f.cfg.Notifier.RegisterConfirmationsNtfn(&txid,
+					6, channel.FundingBroadcastHeight)
+				if err != nil {
+					fndgLog.Errorf("Unable to register for confirmation of "+
+						"ChannelPoint(%v)", channel.FundingOutpoint)
+					return
+				}
+
+				fndgLog.Infof("Waiting for funding tx (%v) to reach %v confirmations",
+					txid, 6)
+
+				// Wait until 6 confirmations has been reached, or the wallet signals a shutdown.
+				select {
+				case _, ok := <-confNtfn.Confirmed:
+					if !ok {
+						fndgLog.Warnf("ChainNotifier shutting down, cannot complete "+
+							"funding flow for ChannelPoint(%v)",
+							channel.FundingOutpoint)
+						return
+					}
+				case <-f.quit:
+					fndgLog.Warnf("fundingManager shutting down, stopping funding "+
+						"flow for ChannelPoint(%v)", channel.FundingOutpoint)
+					return
+				}
+
 
 				lnChannel, err := lnwallet.NewLightningChannel(
 					nil, nil, f.cfg.FeeEstimator, channel)
@@ -1666,10 +1699,11 @@ func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenCha
 		}
 	}
 
+	// The following code is executed regardless of the LSB of ChannelFlags.
+
 	// After the channel is successfully announced from the
 	// fundingManager, we delete the channel from our internal database.
-	// We can do this
-	// because we assume the AuthenticatedGossiper queues the announcement
+	// We can do this because we assume the AuthenticatedGossiper queues the announcement
 	// messages, and persists them in case of a daemon shutdown.
 	err = f.deleteChannelOpeningState(&completeChan.FundingOutpoint)
 	if err != nil {

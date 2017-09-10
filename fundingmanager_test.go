@@ -921,6 +921,11 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		// Next up, we check that the Alice rebroadcasts the announcement
 		// messages on restart.
 		recreateAliceFundingManager(t, alice)
+
+		// This is required because we have sent the FundingLocked message,
+		// but we must wait for 6 confirmations before announcements can be sent.
+		alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
 		time.Sleep(300 * time.Millisecond)
 		for i := 0; i < len(announcements); i++ {
 			select {

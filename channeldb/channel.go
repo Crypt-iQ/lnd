@@ -1567,7 +1567,9 @@ func putChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) erro
 	copy(keyPrefix[:3], channelFlagsPrefix)
 
 	// No need for byteOrder since this is a single byte
-	copy(scratch, channel.ChannelFlags)
+	flags := make([]byte, 1)
+	flags = append(flags, channel.ChannelFlags)
+	copy(scratch[:], flags)
 	return openChanBucket.Put(keyPrefix, scratch)
 }
 
@@ -1588,7 +1590,7 @@ func fetchChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) er
 	copy(keyPrefix[3:], b.Bytes())
 	copy(keyPrefix[:3], channelFlagsPrefix)
 
-	channel.ChannelFlags = openChanBucket.Get(keyPrefix)
+	channel.ChannelFlags = openChanBucket.Get(keyPrefix)[0]
 
 	return nil
 }

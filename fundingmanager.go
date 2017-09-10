@@ -185,6 +185,10 @@ type fundingConfig struct {
 	// created channels to the rest of the Lightning Network.
 	SendAnnouncement func(msg lnwire.Message) error
 
+	// SendToRouter is used by the FundingManager to update the ChannelRouter's
+	// internal channel graph immediately after the FundingLocked message is sent.
+	SendToRouter func(node *channeldb.LightningNode) error
+
 	// SendToPeer allows the FundingManager to send messages to the peer
 	// node during the multiple steps involved in the creation of the
 	// channel's funding transaction and initial commitment transaction.
@@ -655,8 +659,6 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 
 	msg := fmsg.msg
 	amt := msg.FundingAmount
-
-	// TODO - #306 - channelFlags
 
 	// TODO(roasbeef): modify to only accept a _single_ pending channel per
 	// block unless white listed
@@ -1491,7 +1493,21 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 		return
 	}
 
-	// TODO - #305 - Add channel to ChannelRouter (new function / add Router)
+	// Construct the *LightningNode which will be added to the ChannelRouter
+	lnode := &channeldb.LightningNode{
+		HaveNodeAnnouncement: false,
+		PubKey:		      completeChan.IdentityPub,
+	}
+
+	// Send this *LightningNode to the ChannelRouter to add to its internal graph.
+	if err = f.cfg.SendToRouter(lnode); err != nil {
+		fndgLog.Errorf("error adding remote node to ChannelRouter graph: %v", err)
+		channel.Stop()
+		if errChan != nil {
+			errChan <- err
+		}
+		return
+	}
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.
@@ -1631,17 +1647,23 @@ func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenCha
 	fndgLog.Infof("Announcing ChannelPoint(%v), short_chan_id=%v",
 		&fundingPoint, spew.Sdump(shortChanID))
 
-	// Register the new link with the L3 routing manager so this new
-	// channel can be utilized during path finding.
-	err := f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
-		channel.LocalFundingKey, channel.RemoteFundingKey,
-		*shortChanID, chanID)
-	if err != nil {
-		if errChan != nil {
-			errChan <- err
+	var err error
+
+	// If the LSB of ChannelFlags is 1, we announce the channel.
+	// If the LSB is 0, we don't.
+	if completeChan.ChannelFlags & 1 == 1 {
+		// Register the new link with the L3 routing manager so this new
+		// channel can be utilized during path finding.
+		err = f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
+			channel.LocalFundingKey, channel.RemoteFundingKey,
+			*shortChanID, chanID)
+		if err != nil {
+			if errChan != nil {
+				errChan <- err
+			}
+			fndgLog.Errorf("channel announcement failed: %v", err)
+			return
 		}
-		fndgLog.Errorf("channel announcement failed: %v", err)
-		return
 	}
 
 	// After the channel is successfully announced from the

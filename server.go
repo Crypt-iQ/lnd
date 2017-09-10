@@ -1464,6 +1464,7 @@ func (s *server) OpenChannel(peerID int32, nodeKey *btcec.PublicKey,
 		chainHash:       *activeNetParams.GenesisHash,
 		localFundingAmt: localAmt,
 		pushAmt:         pushAmt,
+		channelFlags:    1,
 		updates:         updateChan,
 		err:             errChan,
 	}

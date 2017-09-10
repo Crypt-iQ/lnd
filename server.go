@@ -92,6 +92,8 @@ type server struct {
 	// changed since last start.
 	currentNodeAnn *lnwire.NodeAnnouncement
 
+	channelFlags byte
+
 	quit chan struct{}
 
 	wg sync.WaitGroup
@@ -1464,7 +1466,7 @@ func (s *server) OpenChannel(peerID int32, nodeKey *btcec.PublicKey,
 		chainHash:       *activeNetParams.GenesisHash,
 		localFundingAmt: localAmt,
 		pushAmt:         pushAmt,
-		channelFlags:    1,
+		channelFlags:    s.channelFlags,
 		updates:         updateChan,
 		err:             errChan,
 	}

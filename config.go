@@ -125,6 +125,8 @@ type config struct {
 	Autopilot *autoPilotConfig `group:"autopilot" namespace:"autopilot"`
 
 	NoNetBootstrap bool `long:"nobootstrap" description:"If true, then automatic network bootstrapping will not be attempted."`
+
+	StealthChannel bool `long:"stealth" description:"If true, then the channel will not be announced to the greater network during the funding workflow."`
 }
 
 // loadConfig initializes and parses the config using a config file and command

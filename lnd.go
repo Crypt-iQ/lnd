@@ -75,6 +75,16 @@ func lndMain() error {
 		}
 	}()
 
+
+	var stealthChannel byte
+	if cfg.StealthChannel {
+		// This channel is stealthy and will NOT be announced to the greater network.
+		stealthChannel = 0
+	} else {
+		// This channel is NOT stealthy and WILL be announced to the greater network.
+		stealthChannel = 1
+	}
+
 	// Show version at startup.
 	ltndLog.Infof("Version %s", version())
 
@@ -155,6 +165,9 @@ func lndMain() error {
 		srvrLog.Errorf("unable to create server: %v\n", err)
 		return err
 	}
+
+	// Set channelFlags to stealthChannel
+	server.channelFlags = stealthChannel
 
 	// Next, we'll initialize the funding manager itself so it can answer
 	// queries while the wallet+chain are still syncing.

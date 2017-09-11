@@ -1590,7 +1590,9 @@ func fetchChanChannelFlags(openChanBucket *bolt.Bucket, channel *OpenChannel) er
 	copy(keyPrefix[3:], b.Bytes())
 	copy(keyPrefix[:3], channelFlagsPrefix)
 
-	channel.ChannelFlags = openChanBucket.Get(keyPrefix)[0]
+	if (len(openChanBucket.Get(keyPrefix)) > 0) {
+		channel.ChannelFlags = openChanBucket.Get(keyPrefix)[0]
+	}
 
 	return nil
 }

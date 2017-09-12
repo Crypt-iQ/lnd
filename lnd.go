@@ -200,12 +200,6 @@ func lndMain() error {
 				idPrivKey.PubKey())
 			return <-errChan
 		},
-		SendToRouter: func(node *channeldb.LightningNode) error {
-			if err := server.chanRouter.AddNode(node); err != nil {
-				return err
-			}
-			return nil
-		},
 		ArbiterChan:    server.breachArbiter.newContracts,
 		SendToPeer:     server.SendToPeer,
 		FindPeer:       server.FindPeer,

@@ -185,10 +185,6 @@ type fundingConfig struct {
 	// created channels to the rest of the Lightning Network.
 	SendAnnouncement func(msg lnwire.Message) error
 
-	// SendToRouter is used by the FundingManager to update the ChannelRouter's
-	// internal channel graph immediately after the FundingLocked message is sent.
-	SendToRouter func(node *channeldb.LightningNode) error
-
 	// SendToPeer allows the FundingManager to send messages to the peer
 	// node during the multiple steps involved in the creation of the
 	// channel's funding transaction and initial commitment transaction.
@@ -1526,21 +1522,8 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 		return
 	}
 
-	// Construct the *LightningNode which will be added to the ChannelRouter
-	lnode := &channeldb.LightningNode{
-		HaveNodeAnnouncement: false,
-		PubKey:		      completeChan.IdentityPub,
-	}
-
-	// Send this *LightningNode to the ChannelRouter to add to its internal graph.
-	if err = f.cfg.SendToRouter(lnode); err != nil {
-		fndgLog.Errorf("error adding remote node to ChannelRouter graph: %v", err)
-		channel.Stop()
-		if errChan != nil {
-			errChan <- err
-		}
-		return
-	}
+	// TODO - Send our ChannelEdgeInfo & ChannelEdgePolicy to the ChannelRouter
+	//      - We must also send our peer's ChannelEdgePolicy to the ChannelRouter somehow...
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.

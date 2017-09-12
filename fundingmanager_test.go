@@ -189,9 +189,6 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 		CurrentNodeAnnouncement: func() (lnwire.NodeAnnouncement, error) {
 			return lnwire.NodeAnnouncement{}, nil
 		},
-		SendToRouter: func(node *channeldb.LightningNode) error {
-			return nil
-		},
 		ArbiterChan: arbiterChan,
 		SendToPeer: func(target *btcec.PublicKey, msgs ...lnwire.Message) error {
 			select {
@@ -253,9 +250,6 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 		},
 		CurrentNodeAnnouncement: func() (lnwire.NodeAnnouncement, error) {
 			return lnwire.NodeAnnouncement{}, nil
-		},
-		SendToRouter: func(node *channeldb.LightningNode) error {
-			return nil
 		},
 		ArbiterChan: oldCfg.ArbiterChan,
 		SendToPeer: func(target *btcec.PublicKey,

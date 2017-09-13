@@ -1543,6 +1543,8 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 		return err
 	}
 
+	// TODO(eugene) Add to channel graph
+
 	return nil
 }
 
@@ -1553,7 +1555,36 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenChannel,
 	channel *lnwallet.LightningChannel, shortChanID *lnwire.ShortChannelID) error {
 
-	// TODO(eugene) wait for 6 confirmations here
+	// Register with the ChainNotifier for a notification once the funding
+	// transaction reaches 6 confirmations.
+	txid := completeChan.FundingOutpoint.Hash
+	confNtfn, err := f.cfg.Notifier.RegisterConfirmationsNtfn(&txid, 6,
+		completeChan.FundingBroadcastHeight)
+	if err != nil {
+		fndgLog.Errorf("Unable to register for confirmation of " +
+			"ChannelPoint(%v)", completeChan.FundingOutpoint)
+		return err
+	}
+
+	var ok bool
+
+	// Wait until 6 confirmations has been reached or the wallet signals a
+	// shutdown.
+	select {
+	case _, ok = <-confNtfn.Confirmed:
+		// fallthrough
+	case <-f.quit:
+		fndgLog.Warnf("fundingManager shutting down, stopping funding " +
+			"flow for ChannelPoint(%v)", completeChan.FundingOutpoint)
+		return nil
+	}
+
+	if !ok {
+		fndgLog.Warnf("ChainNotifier shutting down, cannot complete " +
+			"funding flow for ChannelPoint(%v)",
+			completeChan.FundingOutpoint)
+		return nil
+	}
 
 	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
 	fundingPoint := completeChan.FundingOutpoint
@@ -1563,7 +1594,7 @@ func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenCha
 
 	// Register the new link with the L3 routing manager so this new
 	// channel can be utilized during path finding.
-	err := f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
+	err = f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
 		channel.LocalFundingKey, channel.RemoteFundingKey,
 		*shortChanID, chanID)
 	if err != nil {

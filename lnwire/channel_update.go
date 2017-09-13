@@ -54,6 +54,8 @@ type ChannelUpdate struct {
 	// FeeRate is the fee rate that will be charged per millionth of a
 	// satoshi.
 	FeeRate uint32
+
+	ChannelFlags byte
 }
 
 // A compile time check to ensure ChannelUpdate implements the lnwire.Message

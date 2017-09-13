@@ -220,6 +220,13 @@ type fundingConfig struct {
 	// in order to give us more time to claim funds in the case of a
 	// contract breach.
 	RequiredRemoteDelay func(btcutil.Amount) uint16
+
+	AddEdge func(edge *channeldb.ChannelEdgeInfo) error
+
+	UpdateEdge func(update *channeldb.ChannelEdgePolicy) error
+
+	GetChannelByID func(chanID lnwire.ShortChannelID) (*channeldb.ChannelEdgeInfo,
+		*channeldb.ChannelEdgePolicy, *channeldb.ChannelEdgePolicy, error)
 }
 
 // fundingManager acts as an orchestrator/bridge between the wallet's
@@ -1284,6 +1291,54 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 	}()
 }
 
+func (f *fundingManager) processChannelUpdate(fmsg *lnwire.ChannelUpdate,
+	peerAddress *lnwire.NetAddress) error {
+
+	// process and send to channelrouter via f.cfg.UpdateEdge()
+	//peerIDKey := newSerializedKey(fmsg.peerAddress.IdentityKey)
+	chanInfo, _, _, err := f.cfg.GetChannelByID(fmsg.ShortChannelID)
+	if err != nil {
+		return err
+	}
+
+	var i int = 0
+	// Compare peerIDKey
+	// If peerIDKey matches a key in chanInfo as does our key...
+	if bytes.Compare(f.cfg.IDKey.SerializeCompressed(), chanInfo.NodeKey1.SerializeCompressed()) == -1 {
+	} else {
+		i++
+	}
+	if bytes.Compare(f.cfg.IDKey.SerializeCompressed(), chanInfo.NodeKey2.SerializeCompressed()) == -1 {
+	} else {
+		i++
+	}
+
+
+	// continue
+	if i == 1 {
+		// Convert ChannelUpdate message into ChannelEdgePolicy
+		// call f.cfg.UpdateEdge
+		update := &channeldb.ChannelEdgePolicy{
+			Signature:	fmsg.Signature,
+			ChannelID:	fmsg.ShortChannelID.ToUint64(),
+			LastUpdate:	time.Unix(int64(fmsg.Timestamp), 0),
+			Flags:		fmsg.Flags,
+			TimeLockDelta:  fmsg.TimeLockDelta,
+			MinHTLC:	fmsg.HtlcMinimumMsat,
+			FeeBaseMSat: 	lnwire.MilliSatoshi(fmsg.BaseFee),
+			FeeProportionalMillionths: lnwire.MilliSatoshi(fmsg.FeeRate),
+
+		}
+
+		// Send ChannelEdgePolicy
+		f.cfg.UpdateEdge(update)
+	} else {
+		fmt.Errorf("incorrect i val")
+	}
+
+	return nil
+}
+
 // waitForFundingWithTimeout is a wrapper around waitForFundingConfirmation that
 // will cancel the wait for confirmation if maxWaitNumBlocksFundingConf has
 // passed from bestHeight. In the case of timeout, the timeoutChan will be
@@ -1524,10 +1579,93 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 
 	// TODO - Send our ChannelEdgeInfo & ChannelEdgePolicy to the ChannelRouter
 	//      - We must also send our peer's ChannelEdgePolicy to the ChannelRouter somehow...
+	// 	- Change SendToPeer so that if a ChannelUpdate message comes in and has channelFlags & 1 == 0
+	//        we handle it differently instead of passing it off to the gossiper.
+
+	/*ann, err := f.newChanAnnouncement(f.cfg.IDKey, completeChan.IdentityPub,
+		channel.LocalFundingKey, channel.RemoteFundingKey, *shortChanID, chanID)*/
+
+	chainHash := *f.cfg.Wallet.Cfg.NetParams.GenesisHash
+
+	chanAnn := &lnwire.ChannelAnnouncement{
+		ShortChannelID: *shortChanID,
+		Features:	lnwire.NewFeatureVector([]lnwire.Feature{}),
+		ChainHash:	chainHash,
+	}
+
+	var chanFlags uint16
+
+	selfBytes := f.cfg.IDKey.SerializeCompressed()
+	remoteBytes := completeChan.IdentityPub.SerializeCompressed()
+	if bytes.Compare(selfBytes, remoteBytes) == -1 {
+		chanAnn.NodeID1 = f.cfg.IDKey
+		chanAnn.NodeID2 = completeChan.IdentityPub
+		chanAnn.BitcoinKey1 = channel.LocalFundingKey
+		chanAnn.BitcoinKey2 = channel.RemoteFundingKey
+		chanFlags = 0
+	} else {
+		chanAnn.NodeID1 = completeChan.IdentityPub
+		chanAnn.NodeID2 = f.cfg.IDKey
+		chanAnn.BitcoinKey1 = channel.RemoteFundingKey
+		chanAnn.BitcoinKey2 = channel.LocalFundingKey
+		chanFlags = 1
+	}
+
+	chanUpdateAnn := &lnwire.ChannelUpdate{
+		ShortChannelID: *shortChanID,
+		ChainHash:	chainHash,
+		Timestamp:	uint32(time.Now().Unix()),
+		Flags:		chanFlags,
+		TimeLockDelta:	uint16(f.cfg.DefaultRoutingPolicy.TimeLockDelta),
+		HtlcMinimumMsat:f.cfg.DefaultRoutingPolicy.MinHTLC,
+		BaseFee:	uint32(f.cfg.DefaultRoutingPolicy.BaseFee),
+		FeeRate:	uint32(f.cfg.DefaultRoutingPolicy.FeeRate),
+	}
+
+	chanUpdateMsg, _ := chanUpdateAnn.DataToSign()
+	chanUpdateAnn.Signature, _ = f.cfg.SignMessage(f.cfg.IDKey, chanUpdateMsg)
+
+	// Convert ChannelAnnouncement & ChannelUpdate to ChannelEdgeInfo & ChannelEdgePolicy
+
+	// ChannelEdgeInfo:
+	var featureBuf bytes.Buffer
+	chanAnn.Features.Encode(&featureBuf)
+	edge := &channeldb.ChannelEdgeInfo{
+		ChannelID:	chanAnn.ShortChannelID.ToUint64(),
+		ChainHash: 	chanAnn.ChainHash,
+		NodeKey1:	chanAnn.NodeID1,
+		NodeKey2:	chanAnn.NodeID2,
+		BitcoinKey1:	chanAnn.BitcoinKey1,
+		BitcoinKey2:	chanAnn.BitcoinKey2,
+		Features:	featureBuf.Bytes(),
+	}
+
+	// Send ChannelEdgeInfo
+	f.cfg.AddEdge(edge)
+
+	// ChannelEdgePolicy:
+	update := &channeldb.ChannelEdgePolicy{
+		Signature:	chanUpdateAnn.Signature,
+		ChannelID:	chanUpdateAnn.ShortChannelID.ToUint64(),
+		LastUpdate:	time.Unix(int64(chanUpdateAnn.Timestamp), 0),
+		Flags:		chanUpdateAnn.Flags,
+		TimeLockDelta:  chanUpdateAnn.TimeLockDelta,
+		MinHTLC:	chanUpdateAnn.HtlcMinimumMsat,
+		FeeBaseMSat: 	lnwire.MilliSatoshi(chanUpdateAnn.BaseFee),
+		FeeProportionalMillionths: lnwire.MilliSatoshi(chanUpdateAnn.FeeRate),
+	}
+
+	// Send ChannelEdgePolicy
+	f.cfg.UpdateEdge(update)
+
+	// Send ChannelUpdate to peer via f.cfg.SendToPeer
+	// Set ChannelFlags to 2 first...
+	chanUpdateAnn.ChannelFlags = 2
+	f.cfg.SendToPeer(completeChan.IdentityPub, chanUpdateAnn)
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.
-	lnChan <- channel
+	//lnChan <- channel
 }
 
 // announceChannelAfterFundingLocked announces the channel to the greater network

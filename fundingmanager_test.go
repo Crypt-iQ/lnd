@@ -216,6 +216,16 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 		RequiredRemoteDelay: func(amt btcutil.Amount) uint16 {
 			return 4
 		},
+		AddEdge: func(edge *channeldb.ChannelEdgeInfo) error {
+			return nil
+		},
+		UpdateEdge: func(update *channeldb.ChannelEdgePolicy) error {
+			return nil
+		},
+		GetChannelByID: func(chanID lnwire.ShortChannelID) (*channeldb.ChannelEdgeInfo, *channeldb.ChannelEdgePolicy,
+			*channeldb.ChannelEdgePolicy, error) {
+			return nil, nil, nil, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("failed creating fundingManager: %v", err)

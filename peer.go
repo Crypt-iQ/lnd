@@ -666,8 +666,15 @@ out:
 			isChanUpdate = true
 			targetChan = msg.ChanID
 
-		case *lnwire.ChannelUpdate,
-			*lnwire.ChannelAnnouncement,
+		case *lnwire.ChannelUpdate:
+			if msg.ChannelFlags & 2 == 2 {
+				p.server.fundingMgr.processChannelUpdate(msg, p.addr)
+			} else {
+				p.server.authGossiper.ProcessRemoteAnnouncement(msg,
+					p.addr.IdentityKey)
+			}
+
+		case *lnwire.ChannelAnnouncement,
 			*lnwire.NodeAnnouncement,
 			*lnwire.AnnounceSignatures:
 

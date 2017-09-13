@@ -234,6 +234,16 @@ func lndMain() error {
 			// configuration
 			return 4
 		},
+		AddEdge: func(edge *channeldb.ChannelEdgeInfo) error {
+			return server.chanRouter.AddEdge(edge)
+		},
+		UpdateEdge: func(update *channeldb.ChannelEdgePolicy) error {
+			return server.chanRouter.UpdateEdge(update)
+		},
+		GetChannelByID: func(chanID lnwire.ShortChannelID) (*channeldb.ChannelEdgeInfo, *channeldb.ChannelEdgePolicy,
+		*channeldb.ChannelEdgePolicy, error) {
+			return server.chanRouter.GetChannelByID(chanID)
+		},
 	})
 	if err != nil {
 		return err

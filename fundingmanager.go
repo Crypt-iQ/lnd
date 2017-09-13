@@ -24,6 +24,7 @@ import (
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 	"google.golang.org/grpc"
+	"github.com/lightningnetwork/lnd/routing"
 )
 
 const (
@@ -1313,11 +1314,9 @@ func (f *fundingManager) processChannelUpdate(fmsg *lnwire.ChannelUpdate,
 		i++
 	}
 
-
 	// continue
 	if i == 1 {
 		// Convert ChannelUpdate message into ChannelEdgePolicy
-		// call f.cfg.UpdateEdge
 		update := &channeldb.ChannelEdgePolicy{
 			Signature:	fmsg.Signature,
 			ChannelID:	fmsg.ShortChannelID.ToUint64(),
@@ -1327,7 +1326,6 @@ func (f *fundingManager) processChannelUpdate(fmsg *lnwire.ChannelUpdate,
 			MinHTLC:	fmsg.HtlcMinimumMsat,
 			FeeBaseMSat: 	lnwire.MilliSatoshi(fmsg.BaseFee),
 			FeeProportionalMillionths: lnwire.MilliSatoshi(fmsg.FeeRate),
-
 		}
 
 		// Send ChannelEdgePolicy
@@ -1665,7 +1663,7 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 
 	// We signal to another goroutine to start the channel announcement process,
 	// only if it has reached the correct number of confirmations.
-	//lnChan <- channel
+	lnChan <- channel
 }
 
 // announceChannelAfterFundingLocked announces the channel to the greater network
@@ -1775,16 +1773,22 @@ func (f *fundingManager) announceChannelAfterFundingLocked(doneChan chan<- struc
 		return
 	}
 
-	shortChanID := lnwire.ShortChannelID{
+	f.localDiscoveryMtx.Lock()
+	if discoverySignal, ok := f.localDiscoverySignals[lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)]; ok {
+		close(discoverySignal)
+	}
+	f.localDiscoveryMtx.Unlock()
+
+	/*shortChanID := lnwire.ShortChannelID{
 		BlockHeight: confDetails.BlockHeight,
 		TxIndex:     confDetails.TxIndex,
 		TxPosition:  uint16(completeChan.FundingOutpoint.Index),
-	}
+	}*/
 
 	defer channel.Stop()
 
 	// Send channel announcement
-	f.sendChannelAnnouncement(completeChan, channel, &shortChanID, errChan)
+	//f.sendChannelAnnouncement(completeChan, channel, &shortChanID, errChan)
 }
 
 // sendChannelAnnouncement broadcast the necessary channel announcement
@@ -1858,6 +1862,13 @@ func (f *fundingManager) processFundingLocked(msg *lnwire.FundingLocked,
 // handleFundingLocked finalizes the channel funding process and enables the
 // channel to enter normal operating mode.
 func (f *fundingManager) handleFundingLocked(fmsg *fundingLockedMsg) {
+
+
+	fndgLog.Errorf("FundingLocked \n\n: %v", routing.NewLogClosure(func() string {
+		return spew.Sdump(fmsg)
+	}),
+	)
+
 	f.localDiscoveryMtx.Lock()
 	localDiscoverySignal, ok := f.localDiscoverySignals[fmsg.msg.ChanID]
 	f.localDiscoveryMtx.Unlock()
@@ -1876,6 +1887,12 @@ func (f *fundingManager) handleFundingLocked(fmsg *fundingLockedMsg) {
 		delete(f.localDiscoverySignals, fmsg.msg.ChanID)
 		f.localDiscoveryMtx.Unlock()
 	}
+
+
+	fndgLog.Errorf("FundingLocked2 \n\n: %v", routing.NewLogClosure(func() string {
+		return spew.Sdump(fmsg)
+	}),
+	)
 
 	// First, we'll attempt to locate the channel who's funding workflow is
 	// being finalized by this message. We got to the database rather than

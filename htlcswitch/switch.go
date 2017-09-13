@@ -16,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/lightningnetwork/lnd/routing"
 )
 
 var (
@@ -340,6 +341,10 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 	// appropriate channel link and send the payment over this link.
 	case *lnwire.UpdateAddHTLC:
 		// Try to find links by node destination.
+		log.Errorf("DestNode \n\n: %v", routing.NewLogClosure(func() string {
+			return spew.Sdump(packet.destNode)
+		}),
+		)
 		links, err := s.getLinks(packet.destNode)
 		if err != nil {
 			log.Errorf("unable to find links by "+
@@ -885,6 +890,14 @@ func (s *Switch) addLink(link ChannelLink) error {
 	// Next we'll add the link to the interface index so we can quickly
 	// look up all the channels for a particular node.
 	peerPub := link.Peer().PubKey()
+	log.Errorf("PeerPub \n\n: %v", routing.NewLogClosure(func() string {
+			return spew.Sdump(peerPub)
+		}),
+	)
+	log.Errorf("Link \n\n: %v", routing.NewLogClosure(func() string {
+		return spew.Sdump(link)
+	}),
+	)
 	if _, ok := s.interfaceIndex[peerPub]; !ok {
 		s.interfaceIndex[peerPub] = make(map[ChannelLink]struct{})
 	}

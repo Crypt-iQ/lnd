@@ -33,6 +33,8 @@ func UseLogger(logger btclog.Logger) {
 // don't have to be performed when the logging level doesn't warrant it.
 type logClosure func() string
 
+type LogClosure func() string
+
 // String invokes the underlying function and returns the result.
 func (c logClosure) String() string {
 	return c()
@@ -43,4 +45,8 @@ func (c logClosure) String() string {
 // logging system.
 func newLogClosure(c func() string) logClosure {
 	return logClosure(c)
+}
+
+func NewLogClosure(c func() string) LogClosure {
+	return LogClosure(c)
 }

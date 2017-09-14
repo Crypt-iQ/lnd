@@ -67,8 +67,9 @@ var (
 )
 
 type mockNotifier struct {
-	confChannel chan *chainntnfs.TxConfirmation
-	epochChan   chan *chainntnfs.BlockEpoch
+	confChannel 	chan *chainntnfs.TxConfirmation
+	epochChan   	chan *chainntnfs.BlockEpoch
+	txConfirmations map[*chainntnfs.TxConfirmation]int
 }
 
 func (m *mockNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash, numConfs,
@@ -97,6 +98,17 @@ func (m *mockNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
 		Spend:  make(chan *chainntnfs.SpendDetail),
 		Cancel: func() {},
 	}, nil
+}
+
+func (m *mockNotifier) SendAllTxConfirmation(numConfs int) {
+	// Send all *chainntnfs.TxConfirmation from user.mockNotifier.txConfirmations
+	// with confirmations less than or equal to numConfs.
+	for txConfirm, confirmations := range m.txConfirmations {
+		if confirmations <= numConfs {
+			m.confChannel <- txConfirm
+			delete(m.txConfirmations, txConfirm)
+		}
+	}
 }
 
 type testNode struct {
@@ -216,6 +228,21 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 		RequiredRemoteDelay: func(amt btcutil.Amount) uint16 {
 			return 4
 		},
+		AddEdge: func(edge *channeldb.ChannelEdgeInfo) error {
+			return nil
+		},
+		UpdateEdge: func(update *channeldb.ChannelEdgePolicy) error {
+			return nil
+		},
+		GetChannelByID: func(chanID lnwire.ShortChannelID) (
+			*channeldb.ChannelEdgeInfo, *channeldb.ChannelEdgePolicy,
+			*channeldb.ChannelEdgePolicy, error) {
+			return nil, nil, nil, nil
+		},
+		SendChannelUpdate: func(target *btcec.PublicKey,
+			msg lnwire.Message) error {
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("failed creating fundingManager: %v", err)
@@ -260,6 +287,21 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 		FindPeer: func(peerKey *btcec.PublicKey) (*peer, error) {
 			return nil, nil
 		},
+		AddEdge: func(edge *channeldb.ChannelEdgeInfo) error {
+			return nil
+		},
+		UpdateEdge: func(update *channeldb.ChannelEdgePolicy) error {
+			return nil
+		},
+		GetChannelByID: func(chanID lnwire.ShortChannelID) (
+			*channeldb.ChannelEdgeInfo, *channeldb.ChannelEdgePolicy,
+			*channeldb.ChannelEdgePolicy, error) {
+			return nil, nil, nil, nil
+		},
+		SendChannelUpdate: func(target *btcec.PublicKey,
+			msg lnwire.Message) error {
+			return nil
+		},
 		TempChanIDSeed: oldCfg.TempChanIDSeed,
 		FindChannel:    oldCfg.FindChannel,
 	})
@@ -287,8 +329,9 @@ func setupFundingManagers(t *testing.T, shutdownChannel chan struct{}) (*testNod
 	estimator := lnwallet.StaticFeeEstimator{FeeRate: 250}
 
 	aliceMockNotifier := &mockNotifier{
-		confChannel: make(chan *chainntnfs.TxConfirmation, 1),
-		epochChan:   make(chan *chainntnfs.BlockEpoch, 1),
+		confChannel: 	make(chan *chainntnfs.TxConfirmation, 1),
+		epochChan:   	make(chan *chainntnfs.BlockEpoch, 1),
+		txConfirmations:  make(map[*chainntnfs.TxConfirmation]int),
 	}
 
 	aliceTestDir, err := ioutil.TempDir("", "alicelnwallet")
@@ -323,8 +366,9 @@ func setupFundingManagers(t *testing.T, shutdownChannel chan struct{}) (*testNod
 	}
 
 	bobMockNotifier := &mockNotifier{
-		confChannel: make(chan *chainntnfs.TxConfirmation, 1),
-		epochChan:   make(chan *chainntnfs.BlockEpoch, 1),
+		confChannel: 	make(chan *chainntnfs.TxConfirmation, 1),
+		epochChan:   	make(chan *chainntnfs.BlockEpoch, 1),
+		txConfirmations:make(map[*chainntnfs.TxConfirmation]int),
 	}
 
 	bobTestDir, err := ioutil.TempDir("", "boblnwallet")
@@ -459,6 +503,9 @@ func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 
 	// Give the message to Bob.
 	bob.fundingMgr.processFundingCreated(fundingCreated, aliceAddr)
+	// Add a *chainntnfs.TxConfirmation to txConfirmations since Bob
+	// calls waitForFundingWithTimeout in handleFundingCreated.
+	bob.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 1
 
 	// Finally, Bob should send the FundingSigned message.
 	select {
@@ -481,6 +528,9 @@ func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 
 	// Forward the signature to Alice.
 	alice.fundingMgr.processFundingSigned(fundingSigned, bobAddr)
+	// Add a *chainntnfs.TxConfirmation to txConfirmations since Alice
+	// calls waitForFundingConfirmation in handleFundingSigned.
+	alice.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 1
 
 	// After Alice processes the singleFundingSignComplete message, she will
 	// broadcast the funding transaction to the network. We expect to get a
@@ -528,8 +578,8 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan)
 
 	// Notify that transaction was mined
-	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
-	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	alice.mockNotifier.SendAllTxConfirmation(1)
+	bob.mockNotifier.SendAllTxConfirmation(1)
 
 	// Give fundingManager time to process the newly mined tx and write
 	//state to database.
@@ -568,6 +618,9 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 			"instead got %T", fundingLockedAlice)
 	}
 
+	// sendChannelAnnouncement will now be waiting for 6 confirmations.
+	alice.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 6
+
 	// And similarly Bob will send funding locked to Alice.
 	var fundingLockedBob lnwire.Message
 	select {
@@ -580,6 +633,13 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		t.Fatalf("expected fundingLocked sent from Bob, "+
 			"instead got %T", fundingLockedBob)
 	}
+
+	// sendChannelAnnouncement will now be waiting for 6 confirmations.
+	bob.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 6
+
+	// Send all *chainntnfs.TxConfirmations with 6 confirmations or less.
+	alice.mockNotifier.SendAllTxConfirmation(6)
+	bob.mockNotifier.SendAllTxConfirmation(6)
 
 	// Sleep to make sure database write is finished.
 	time.Sleep(300 * time.Millisecond)
@@ -746,8 +806,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	}
 
 	// Notify that transaction was mined
-	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
-	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	alice.mockNotifier.SendAllTxConfirmation(1)
+	bob.mockNotifier.SendAllTxConfirmation(1)
 
 	// Give fundingManager time to process the newly mined tx and write to
 	// the database.
@@ -792,6 +852,9 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 			"instead got %T", fundingLockedBob)
 	}
 
+	// sendChannelAnnouncement will now be waiting for 6 confirmations.
+	bob.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 6
+
 	// Sleep to make sure database write is finished.
 	time.Sleep(1 * time.Second)
 
@@ -830,6 +893,14 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		t.Fatalf("expected fundingLocked sent from Alice, "+
 			"instead got %T", fundingLockedAlice)
 	}
+
+	// sendChannelAnnouncement will now be waiting for 6 confirmations.
+	alice.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 6
+
+	// Send all *chainntnfs.TxConfirmations with 6 confirmations or less.
+	alice.mockNotifier.SendAllTxConfirmation(6)
+	// Send all *chainntnfs.TxConfirmations with 6 confirmations or less.
+	bob.mockNotifier.SendAllTxConfirmation(6)
 
 	// Sleep to make sure database write is finished.
 	time.Sleep(500 * time.Millisecond)
@@ -896,6 +967,12 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// Next up, we check that the Alice rebroadcasts the announcement
 	// messages on restart.
 	recreateAliceFundingManager(t, alice)
+
+	// sendChannelAnnouncement will now be waiting for 6 confirmations.
+	alice.mockNotifier.txConfirmations[&chainntnfs.TxConfirmation{}] = 6
+	// Send all *chainntnfs.TxConfirmations with 6 confirmations or less.
+	alice.mockNotifier.SendAllTxConfirmation(6)
+
 	time.Sleep(300 * time.Millisecond)
 	for i := 0; i < len(announcements); i++ {
 		select {

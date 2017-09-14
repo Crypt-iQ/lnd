@@ -666,8 +666,89 @@ out:
 			isChanUpdate = true
 			targetChan = msg.ChanID
 
-		case *lnwire.ChannelUpdate,
-			*lnwire.ChannelAnnouncement,
+		case *lnwire.ChannelUpdate:
+			// Check whether we are connected to the node that sent
+			// this ChannelUpdate. If we are, check whether both edges
+			// exist. If both edges do not exist, we will call a
+			// helper function to handle adding a new directed edge
+			// to the ChannelRouter's internal topology.
+			chanInfo, e1, e2, err := p.server.chanRouter.GetChannelByID(
+				msg.ShortChannelID)
+			if err != nil {
+				peerLog.Errorf("Unable to retrieve channel by" +
+					"channel id")
+				continue
+			}
+
+			// We don't know these edges and therefore it is not
+			// a channel we participate in. Otherwise, the router
+			// would know at least one edge.
+			if e1 == nil && e2 == nil {
+				p.server.authGossiper.ProcessRemoteAnnouncement(msg,
+					p.addr.IdentityKey)
+				continue
+			}
+
+			var pubKey *btcec.PublicKey
+			switch msg.Flags {
+			case 0:
+				pubKey = chanInfo.NodeKey1
+			case 1:
+				pubKey = chanInfo.NodeKey2
+			}
+
+			// We validate the ChannelUpdate with the public key.
+			data, err := msg.DataToSign()
+			if err != nil {
+				peerLog.Errorf("Unable to retrieve data to " +
+					"sign: %v", err)
+				continue
+			}
+			dataHash := chainhash.DoubleHashB(data)
+
+			// Verify the signature
+			if !msg.Signature.Verify(dataHash, copyPubKey(pubKey)) {
+				peerLog.Errorf("Invalid signature for channel" +
+					"update: %v", err)
+				continue
+			}
+
+			// Verify that our key is the other public key
+			var ourKey *btcec.PublicKey
+			switch msg.Flags {
+			case 0:
+				ourKey = chanInfo.NodeKey2
+			case 1:
+				ourKey = chanInfo.NodeKey1
+			}
+
+			ourKeyBytes := ourKey.SerializeCompressed()
+			realKeyBytes := p.server.fundingMgr.cfg.IDKey.SerializeCompressed()
+			if bytes.Compare(ourKeyBytes, realKeyBytes) == -1 {
+				p.server.authGossiper.ProcessRemoteAnnouncement(msg,
+					p.addr.IdentityKey)
+				continue
+			} else {
+				// If one of the edges are nil, we know our
+				// peer sent us this with the intention that we
+				// add the edge to the ChannelRouter's topology.
+				if e1 == nil || e2 == nil {
+					err = p.server.fundingMgr.handleChannelUpdate(msg);
+					if err != nil {
+						peerLog.Errorf("Unable to update edge" +
+							"in ChannelRouter topology" +
+							": %v", err)
+					}
+				} else {
+					// If neither edges are nil, this is a
+					// standard ChannelUpdate between us and
+					// our peer. Process it normally.
+					p.server.authGossiper.ProcessRemoteAnnouncement(
+						msg, p.addr.IdentityKey)
+				}
+			}
+
+		case *lnwire.ChannelAnnouncement,
 			*lnwire.NodeAnnouncement,
 			*lnwire.AnnounceSignatures:
 

@@ -762,20 +762,27 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 		// We will add the edge to the channel router. If the nodes
 		// present in this channel are not present in the database, a
 		// partial node will be added to represent each node while we
-		// wait for a node announcement.
-		if err := d.cfg.Router.AddEdge(edge); err != nil {
-			if routing.IsError(err, routing.ErrOutdated,
-				routing.ErrIgnored) {
+		// wait for a node announcement. Because we immediately add our
+		// channel to the ChannelRouter's topology after sending the
+		// FundingLocked message, there is a case where we announce
+		// a ChannelAnnouncement after the edge has already been added
+		// to the ChannelRouter's topology. Therefore, we will branch the
+		// logic depending on the isRemote flag.
+		if nMsg.isRemote {
+			if err := d.cfg.Router.AddEdge(edge); err != nil {
+				if routing.IsError(err, routing.ErrOutdated,
+					routing.ErrIgnored) {
+					log.Debugf("Router rejected channel edge: %v",
+						err)
 
-				log.Debugf("Router rejected channel edge: %v",
-					err)
-			} else {
-				log.Errorf("Router rejected channel edge: %v",
-					err)
+				} else {
+					log.Errorf("Router rejected channel edge: %v",
+						err)
+				}
+
+				nMsg.err <- err
+				return nil
 			}
-
-			nMsg.err <- err
-			return nil
 		}
 
 		// Channel announcement was successfully proceeded and know it

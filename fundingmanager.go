@@ -414,7 +414,8 @@ func (f *fundingManager) Start() error {
 				// resume wait on startup.
 			case shortChanID, ok := <-confChan:
 				if !ok {
-					fndgLog.Errorf("confChan was closed")
+					fndgLog.Errorf("waiting for funding" +
+						"confirmation failed")
 					return
 				}
 				// Success, funding transaction was confirmed.
@@ -425,7 +426,7 @@ func (f *fundingManager) Start() error {
 				lnChannel, err := lnwallet.NewLightningChannel(
 					nil, nil, f.cfg.FeeEstimator, ch)
 				if err != nil {
-					fndgLog.Errorf("error creating new " +
+					fndgLog.Errorf("error creating new "+
 						"lightning channel: %v", err)
 					return
 				}
@@ -496,7 +497,7 @@ func (f *fundingManager) Start() error {
 				lnChannel, err := lnwallet.NewLightningChannel(
 					nil, nil, f.cfg.FeeEstimator, channel)
 				if err != nil {
-					fndgLog.Errorf("error creating new " +
+					fndgLog.Errorf("error creating new "+
 						"lightning channel: %v", err)
 					return
 				}
@@ -1202,13 +1203,13 @@ func (f *fundingManager) handleFundingCreated(fmsg *fundingCreatedMsg) {
 			lnChannel, err := lnwallet.NewLightningChannel(nil, nil,
 				f.cfg.FeeEstimator, completeChan)
 			if err != nil {
-				fndgLog.Errorf("error creating new lightning channel:" +
+				fndgLog.Errorf("error creating new lightning channel:"+
 					" %v", err)
 				return
 			}
 			defer lnChannel.Stop()
 
-			err = f.sendFundingLocked(completeChan, lnChannel, shortChanID);
+			err = f.sendFundingLocked(completeChan, lnChannel, shortChanID)
 			if err != nil {
 				fndgLog.Errorf("Failed to send fundingLocked: %v", err)
 				return
@@ -1338,13 +1339,13 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 			lnChannel, err := lnwallet.NewLightningChannel(nil, nil,
 				f.cfg.FeeEstimator, completeChan)
 			if err != nil {
-				fndgLog.Errorf("error creating new lightning " +
+				fndgLog.Errorf("error creating new lightning "+
 					"channel: %v", err)
 				return
 			}
 			defer lnChannel.Stop()
 
-			err = f.sendFundingLocked(completeChan, lnChannel, shortChanID);
+			err = f.sendFundingLocked(completeChan, lnChannel, shortChanID)
 			if err != nil {
 				fndgLog.Errorf("Failed to send fundingLocked: %v", err)
 				return
@@ -1439,7 +1440,8 @@ func (f *fundingManager) waitForFundingWithTimeout(completeChan *channeldb.OpenC
 			return
 		case shortChanID, ok := <-waitingConfChan:
 			if !ok {
-				fndgLog.Errorf("waitingConfChan was closed")
+				fndgLog.Errorf("waiting for funding confirmation" +
+					"failed")
 				close(confChan)
 				return
 			}
@@ -1586,8 +1588,6 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 			"fundingLockedSent: %v", err)
 		return err
 	}
-
-	// TODO(eugene) Add to channel graph
 
 	return nil
 }

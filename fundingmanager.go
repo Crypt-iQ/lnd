@@ -1522,7 +1522,8 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 // addToRouterGraph sends a private ChannelAnnouncement and a private
 // ChannelUpdate to the gossiper so that it is added to the Router's internal
 // graph before the actual channel announcements are called in
-// sendChannelAnnouncement.
+// sendChannelAnnouncement. These private announcement messages are NOT
+// broadcasted to the greater network.
 func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	channel *lnwallet.LightningChannel,
 	shortChanID *lnwire.ShortChannelID) error {
@@ -1533,7 +1534,7 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 		channel.LocalFundingKey, channel.RemoteFundingKey, *shortChanID,
 		chanID)
 	if err != nil {
-		return fmt.Errorf("error generating channel " +
+		return fmt.Errorf("error generating channel "+
 			"announcement: %v", err)
 	}
 
@@ -1547,11 +1548,11 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	// Send ChannelAnnouncement and ChannelUpdate to the gossiper for
 	// processing.
 	if err = f.cfg.SendAnnouncement(ann.chanAnn); err != nil {
-		return fmt.Errorf("error sending private channel " +
+		return fmt.Errorf("error sending private channel "+
 			"announcement: %v", err)
 	}
 	if err = f.cfg.SendAnnouncement(ann.chanUpdateAnn); err != nil {
-		return fmt.Errorf("error sending private channel " +
+		return fmt.Errorf("error sending private channel "+
 			"update: %v", err)
 	}
 

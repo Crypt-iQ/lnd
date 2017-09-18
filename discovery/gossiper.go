@@ -757,6 +757,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			BitcoinKey2: msg.BitcoinKey2,
 			AuthProof:   proof,
 			Features:    featureBuf.Bytes(),
+			Private:     msg.Private,
 		}
 
 		// We will add the edge to the channel router. If the nodes
@@ -780,8 +781,8 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 
 		// Channel announcement was successfully proceeded and know it
 		// might be broadcast to other connected nodes if it was
-		// announcement with proof (remote).
-		if proof != nil {
+		// announcement with proof (remote) and is not private.
+		if proof != nil && !msg.Private {
 			announcements = append(announcements, msg)
 		}
 
@@ -865,6 +866,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			MinHTLC:                   msg.HtlcMinimumMsat,
 			FeeBaseMSat:               lnwire.MilliSatoshi(msg.BaseFee),
 			FeeProportionalMillionths: lnwire.MilliSatoshi(msg.FeeRate),
+			Private:                   msg.Private,
 		}
 
 		if err := d.cfg.Router.UpdateEdge(update); err != nil {
@@ -881,8 +883,8 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 		// Channel update announcement was successfully processed and
 		// now it can be broadcast to the rest of the network. However,
 		// we'll only broadcast the channel update announcement if it
-		// has an attached authentication proof.
-		if chanInfo.AuthProof != nil {
+		// has an attached authentication proof and is not private.
+		if chanInfo.AuthProof != nil && !msg.Private {
 			announcements = append(announcements, msg)
 		}
 

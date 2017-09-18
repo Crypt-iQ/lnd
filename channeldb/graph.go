@@ -1145,6 +1145,11 @@ type ChannelEdgeInfo struct {
 	// Capacity is the total capacity of the channel, this is determined by
 	// the value output in the outpoint that created this channel.
 	Capacity btcutil.Amount
+
+	// Private determines whether this ChannelEdgeInfo is private or
+	// or not. A private ChannelEdgeInfo is stored in the graph when
+	// the gossiper receives a private ChannelAnnouncement.
+	Private bool
 }
 
 // ChannelAuthProof is the authentication proof (the signature portion) for a
@@ -1223,6 +1228,11 @@ type ChannelEdgePolicy struct {
 	// FeeProportionalMillionths is the rate that the node will charge for
 	// HTLCs for each millionth of a satoshi forwarded.
 	FeeProportionalMillionths lnwire.MilliSatoshi
+
+	// Private determines whether this ChannelEdgePolicy is private or
+	// or not. A private ChannelEdgePolicy is stored in the graph when
+	// the gossiper receives a private ChannelUpdate.
+	Private bool
 
 	// Node is the LightningNode that this directed edge leads to. Using
 	// this pointer the channel graph can further be traversed.

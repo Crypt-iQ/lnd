@@ -475,6 +475,7 @@ func (f *fundingManager) Start() error {
 				}
 				defer lnChannel.Stop()
 
+				// TODO(eugene) add to router graph
 				err = f.sendChannelAnnouncement(channel, lnChannel,
 					shortChanID)
 				if err != nil {
@@ -1449,8 +1450,8 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 }
 
 // handleFundingConfirmation is a wrapper method for creating a new
-// lnwallet.LightningChannel object, calling sendFundingLocked, and for calling
-// sendChannelAnnouncement. This is called after the funding transaction is
+// lnwallet.LightningChannel object, calling sendFundingLocked, addToRouterGraph,
+// and sendChannelAnnouncement. This is called after the funding transaction is
 // confirmed.
 func (f *fundingManager) handleFundingConfirmation(completeChan *channeldb.OpenChannel,
 	shortChanID *lnwire.ShortChannelID) error {
@@ -1466,6 +1467,10 @@ func (f *fundingManager) handleFundingConfirmation(completeChan *channeldb.OpenC
 	err = f.sendFundingLocked(completeChan, lnChannel, shortChanID)
 	if err != nil {
 		return fmt.Errorf("failed sending fundingLocked: %v", err)
+	}
+	err = f.addToRouterGraph(completeChan, lnChannel, shortChanID)
+	if err != nil {
+		return fmt.Errorf("failed adding to router graph: %v", err)
 	}
 	err = f.sendChannelAnnouncement(completeChan, lnChannel, shortChanID)
 	if err != nil {
@@ -1509,6 +1514,45 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 	if err != nil {
 		return fmt.Errorf("error setting channel state to"+
 			" fundingLockedSent: %v", err)
+	}
+
+	return nil
+}
+
+// addToRouterGraph sends a private ChannelAnnouncement and a private
+// ChannelUpdate to the gossiper so that it is added to the Router's internal
+// graph before the actual channel announcements are called in
+// sendChannelAnnouncement.
+func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
+	channel *lnwallet.LightningChannel,
+	shortChanID *lnwire.ShortChannelID) error {
+
+	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
+
+	ann, err := f.newChanAnnouncement(f.cfg.IDKey, completeChan.IdentityPub,
+		channel.LocalFundingKey, channel.RemoteFundingKey, *shortChanID,
+		chanID)
+	if err != nil {
+		return fmt.Errorf("error generating channel " +
+			"announcement: %v", err)
+	}
+
+	// Since both the ChannelAnnouncement and ChannelUpdate are just used
+	// to update the Router's internal topology, we won't broadcast them
+	// to the greater network. Therefore, we set each of their Private flags
+	// to true.
+	ann.chanAnn.Private = true
+	ann.chanUpdateAnn.Private = true
+
+	// Send ChannelAnnouncement and ChannelUpdate to the gossiper for
+	// processing.
+	if err = f.cfg.SendAnnouncement(ann.chanAnn); err != nil {
+		return fmt.Errorf("error sending private channel " +
+			"announcement: %v", err)
+	}
+	if err = f.cfg.SendAnnouncement(ann.chanUpdateAnn); err != nil {
+		return fmt.Errorf("error sending private channel " +
+			"update: %v", err)
 	}
 
 	return nil
@@ -1813,9 +1857,10 @@ func (f *fundingManager) announceChannel(localIDKey, remoteIDKey, localFundingKe
 
 	// With the announcements crafted, we'll now send the announcements to
 	// the rest of the network.
-	//
-	// TODO(roasbeef): add flag that indicates if should be announced or
-	// not
+
+	// Set ChannelAnnouncement's & ChannelUpdate's Private flag to false
+	ann.chanAnn.Private = false
+	ann.chanUpdateAnn.Private = false
 
 	// The announcement message consists of three distinct messages:
 	// 1. channel announcement 2. channel update 3. channel proof

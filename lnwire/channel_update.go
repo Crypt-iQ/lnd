@@ -54,6 +54,11 @@ type ChannelUpdate struct {
 	// FeeRate is the fee rate that will be charged per millionth of a
 	// satoshi.
 	FeeRate uint32
+
+	// Private determines whether this ChannelAnnouncement is private or
+	// or not. A private ChannelAnnouncement is not broadcasted to the
+	// greater network.
+	Private bool
 }
 
 // A compile time check to ensure ChannelUpdate implements the lnwire.Message

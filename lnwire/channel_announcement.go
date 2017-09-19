@@ -49,11 +49,6 @@ type ChannelAnnouncement struct {
 	// multisig funding transaction output.
 	BitcoinKey1 *btcec.PublicKey
 	BitcoinKey2 *btcec.PublicKey
-
-	// Private determines whether this ChannelAnnouncement is private or
-	// or not. A private ChannelAnnouncement is not broadcasted to the
-	// greater network.
-	Private bool
 }
 
 // A compile time check to ensure ChannelAnnouncement implements the

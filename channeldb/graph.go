@@ -1145,11 +1145,6 @@ type ChannelEdgeInfo struct {
 	// Capacity is the total capacity of the channel, this is determined by
 	// the value output in the outpoint that created this channel.
 	Capacity btcutil.Amount
-
-	// Private determines whether this ChannelEdgeInfo is private or
-	// or not. A private ChannelEdgeInfo is stored in the graph when
-	// the gossiper receives a private ChannelAnnouncement.
-	Private bool
 }
 
 // ChannelAuthProof is the authentication proof (the signature portion) for a
@@ -1228,11 +1223,6 @@ type ChannelEdgePolicy struct {
 	// FeeProportionalMillionths is the rate that the node will charge for
 	// HTLCs for each millionth of a satoshi forwarded.
 	FeeProportionalMillionths lnwire.MilliSatoshi
-
-	// Private determines whether this ChannelEdgePolicy is private or
-	// or not. A private ChannelEdgePolicy is stored in the graph when
-	// the gossiper receives a private ChannelUpdate.
-	Private bool
 
 	// Node is the LightningNode that this directed edge leads to. Using
 	// this pointer the channel graph can further be traversed.
@@ -1714,9 +1704,6 @@ func putChanEdgeInfo(edgeIndex *bolt.Bucket, edgeInfo *ChannelEdgeInfo, chanID [
 	if _, err := b.Write(edgeInfo.ChainHash[:]); err != nil {
 		return err
 	}
-	if err := binary.Write(&b, byteOrder, edgeInfo.Private); err != nil {
-		return err
-	}
 
 	return edgeIndex.Put(chanID[:], b.Bytes())
 }
@@ -1821,10 +1808,6 @@ func deserializeChanEdgeInfo(r io.Reader) (*ChannelEdgeInfo, error) {
 		return nil, err
 	}
 
-	if err := binary.Read(r, byteOrder, &edgeInfo.Private); err != nil {
-		return nil, err
-	}
-
 	return edgeInfo, nil
 }
 
@@ -1864,9 +1847,6 @@ func putChanEdgePolicy(edges *bolt.Bucket, edge *ChannelEdgePolicy, from, to []b
 		return err
 	}
 	if err := binary.Write(&b, byteOrder, uint64(edge.FeeProportionalMillionths)); err != nil {
-		return err
-	}
-	if err := binary.Write(&b, byteOrder, edge.Private); err != nil {
 		return err
 	}
 
@@ -1983,10 +1963,6 @@ func deserializeChanEdgePolicy(r io.Reader,
 		return nil, err
 	}
 	edge.FeeProportionalMillionths = lnwire.MilliSatoshi(n)
-
-	if err := binary.Read(r, byteOrder, &edge.Private); err != nil {
-		return nil, err
-	}
 
 	var pub [33]byte
 	if _, err := r.Read(pub[:]); err != nil {

@@ -561,33 +561,21 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 			msg.PubKey.SerializeCompressed())
 
 	case *channeldb.ChannelEdgeInfo:
-		// Because the fundingmanager sends one private ChannelAnnouncement
-		// and one public ChannelAnnouncement, it is possible that we may
-		// need to replace the private ChannelEdgeInfo with a public one.
-		chanInfo, _, _, err := r.GetChannelByID(
-			lnwire.NewShortChanIDFromInt(msg.ChannelID))
-		if err != nil && err != channeldb.ErrEdgeNotFound &&
-			err != channeldb.ErrGraphNoEdgesFound {
-			return errors.Errorf("unable to retrieve channel by "+
-				"channel id: %v", err)
-		}
-
-		// If chanInfo exists, check that we can replace it
-		if chanInfo != nil {
-			if chanInfo.Private && !msg.Private {
-				// We can replace existing ChannelEdgeInfo
-			} else {
-				// TODO(eugene) - true can replace true?
-				// We cannot replace existing ChannelEdgeInfo
-				return newErrf(ErrIgnored, "Ignoring msg for "+
-					"known chan_id=%v", msg.ChannelID)
-			}
+		// Prior to processing the announcement we first check if we
+		// already know of this channel, if so, then we can exit early.
+		_, _, exists, err := r.cfg.Graph.HasChannelEdge(msg.ChannelID)
+		if err != nil && err != channeldb.ErrGraphNoEdgesFound {
+			return errors.Errorf("unable to check for edge "+
+				"existence: %v", err)
+		} else if exists {
+			return newErrf(ErrIgnored, "Ignoring msg for known "+
+				"chan_id=%v", msg.ChannelID)
 		}
 
 		// Query the database for the existence of the two nodes in this
 		// channel. If not found, add a partial node to the database,
 		// containing only the node keys.
-		_, exists, _ := r.cfg.Graph.HasLightningNode(msg.NodeKey1)
+		_, exists, _ = r.cfg.Graph.HasLightningNode(msg.NodeKey1)
 		if !exists {
 			node1 := &channeldb.LightningNode{
 				PubKey:               msg.NodeKey1,
@@ -662,31 +650,17 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// after commitment fees are dynamic.
 		msg.Capacity = btcutil.Amount(chanUtxo.Value)
 		msg.ChannelPoint = *fundingPoint
-		if chanInfo == nil {
-			if err := r.cfg.Graph.AddChannelEdge(msg); err != nil {
-				return errors.Errorf("unable to add edge: %v", err)
-			}
-			log.Infof("New channel discovered! Link "+
-				"connects %x and %x with ChannelPoint(%v): "+
-				"chan_id=%v, capacity=%v",
-				msg.NodeKey1.SerializeCompressed(),
-				msg.NodeKey2.SerializeCompressed(),
-				fundingPoint, msg.ChannelID, msg.Capacity)
-		} else {
-			err := r.cfg.Graph.UpdateChannelEdge(msg)
-			if err != nil {
-				return errors.Errorf("unable to update "+
-					"edge: %v", err)
-			}
-			log.Infof("Channel updated! Link "+
-				"connects %x and %x with ChannelPoint(%v): "+
-				"chan_id=%v, capacity=%v",
-				msg.NodeKey1.SerializeCompressed(),
-				msg.NodeKey2.SerializeCompressed(),
-				fundingPoint, msg.ChannelID, msg.Capacity)
+		if err := r.cfg.Graph.AddChannelEdge(msg); err != nil {
+			return errors.Errorf("unable to add edge: %v", err)
 		}
 
 		invalidateCache = true
+		log.Infof("New channel discovered! Link "+
+			"connects %x and %x with ChannelPoint(%v): "+
+			"chan_id=%v, capacity=%v",
+			msg.NodeKey1.SerializeCompressed(),
+			msg.NodeKey2.SerializeCompressed(),
+			fundingPoint, msg.ChannelID, msg.Capacity)
 
 		// As a new edge has been added to the channel graph, we'll
 		// update the current UTXO filter within our active
@@ -710,52 +684,31 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 
 		}
 
-		// We retrieve the channel to see that even if this policy
-		// has the same timestamp as the stored policy, if the stored
-		// policy has the private field set to true, and this policy
-		// does not, we can proceed.
-		_, e1, e2, err := r.GetChannelByID(
-			lnwire.NewShortChanIDFromInt(msg.ChannelID))
-		if err != nil && err != channeldb.ErrEdgeNotFound {
-			return errors.Errorf("unable to retrieve channel by "+
-				"channel id: %v", err)
-		}
-
 		// As edges are directional edge node has a unique policy for
 		// the direction of the edge they control. Therefore we first
 		// check if we already have the most up to date information for
-		// that edge. If so, then we can exit early. The only exception
-		// is replacing a private policy with a public policy, even if
-		// they are otherwise exactly the same.
+		// that edge. If so, then we can exit early.
 		switch msg.Flags {
 
 		// A flag set of 0 indicates this is an announcement for the
 		// "first" node in the channel
 		case 0:
-			if e1 != nil && e1.Private && !msg.Private {
-				// fallthrough
-			} else {
-				if edge1Timestamp.After(msg.LastUpdate) ||
-					edge1Timestamp.Equal(msg.LastUpdate) {
-					return newErrf(ErrIgnored, "Ignoring announcement "+
-						"(flags=%v) for known chan_id=%v", msg.Flags,
-						msg.ChannelID)
-				}
+			if edge1Timestamp.After(msg.LastUpdate) ||
+				edge1Timestamp.Equal(msg.LastUpdate) {
+				return newErrf(ErrIgnored, "Ignoring announcement "+
+					"(flags=%v) for known chan_id=%v", msg.Flags,
+					msg.ChannelID)
 			}
 
 		// Similarly, a flag set of 1 indicates this is an announcement
 		// for the "second" node in the channel.
 		case 1:
-			if e2 != nil && e2.Private && !msg.Private {
-				// fallthrough
-			} else {
-				if edge2Timestamp.After(msg.LastUpdate) ||
-					edge2Timestamp.Equal(msg.LastUpdate) {
+			if edge2Timestamp.After(msg.LastUpdate) ||
+				edge2Timestamp.Equal(msg.LastUpdate) {
 
-					return newErrf(ErrIgnored, "Ignoring announcement "+
-						"(flags=%v) for known chan_id=%v", msg.Flags,
-						msg.ChannelID)
-				}
+				return newErrf(ErrIgnored, "Ignoring announcement "+
+					"(flags=%v) for known chan_id=%v", msg.Flags,
+					msg.ChannelID)
 			}
 
 		}

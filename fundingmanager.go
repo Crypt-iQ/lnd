@@ -1583,13 +1583,6 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 			"announcement: %v", err)
 	}
 
-	// Since both the ChannelAnnouncement and ChannelUpdate are just used
-	// to update the Router's internal topology, we won't broadcast them
-	// to the greater network. Therefore, we set each of their Private flags
-	// to true.
-	ann.chanAnn.Private = true
-	ann.chanUpdateAnn.Private = true
-
 	// Send ChannelAnnouncement and ChannelUpdate to the gossiper to add
 	// to the Router's topology.
 	if err = f.cfg.SendToGossiper(ann.chanAnn); err != nil {
@@ -1616,9 +1609,6 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 		return fmt.Errorf("error sending private channel update to "+
 			"peer(%x): %v", remoteKey.SerializeCompressed(), err)
 	}
-
-	// TODO(eugene) should we wait for our peer to send us their
-	// ChannelEdgePolicy?
 
 	// As the channel is now added to the ChannelRouter's topology, the
 	// channel is moved to the next state of the state machine. It will be
@@ -1931,24 +1921,10 @@ func (f *fundingManager) announceChannel(localIDKey, remoteIDKey, localFundingKe
 		return err
 	}
 
-	// With the announcements crafted, we'll now send the announcements to
-	// the rest of the network.
-
-	// Set ChannelAnnouncement's & ChannelUpdate's Private flag to false
-	ann.chanAnn.Private = false
-	ann.chanUpdateAnn.Private = false
-
-	// The announcement message consists of three distinct messages:
-	// 1. channel announcement 2. channel update 3. channel proof
-	// We must wait for them all to be successfully announced to the
-	// network, and/ if either fails we consider the announcement
-	// unsuccessful.
-	if err = f.cfg.SendAnnouncement(ann.chanAnn); err != nil {
-		return err
-	}
-	if err = f.cfg.SendAnnouncement(ann.chanUpdateAnn); err != nil {
-		return err
-	}
+	// We only send the channel proof announcement and the node announcement
+	// because addToRouterGraph previously send the ChannelAnnouncement and
+	// the ChannelUpdate announcement messages. The channel proof and node
+	// announcements are broadcast to the greater network.
 	if err = f.cfg.SendAnnouncement(ann.chanProof); err != nil {
 		return err
 	}

@@ -722,7 +722,7 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	//	3) AnnounceSignatures
 	// that will be announced in no particular order.
 	// A node announcement will also be sent.
-	announcements := make([]lnwire.Message, 4)
+	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
@@ -731,17 +731,11 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement := false
-	gotChannelUpdate := false
 	gotAnnounceSignatures := false
 	gotNodeAnnouncement := false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -749,12 +743,6 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Alice")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Alice")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Alice")
 	}
@@ -771,17 +759,11 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement = false
-	gotChannelUpdate = false
 	gotAnnounceSignatures = false
 	gotNodeAnnouncement = false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -789,12 +771,6 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Bob")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Bob")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Bob")
 	}
@@ -1022,7 +998,7 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	}
 
 	// And the public announcements
-	announcements := make([]lnwire.Message, 4)
+	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-bob.announceChan:
@@ -1031,17 +1007,11 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement := false
-	gotChannelUpdate := false
 	gotAnnounceSignatures := false
 	gotNodeAnnouncement := false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -1049,12 +1019,6 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Bob")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Bob")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Bob")
 	}
@@ -1135,17 +1099,11 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement = false
-	gotChannelUpdate = false
 	gotAnnounceSignatures = false
 	gotNodeAnnouncement = false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -1153,12 +1111,6 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Alice after restart")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Alice after restart")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Alice after restart")
 	}

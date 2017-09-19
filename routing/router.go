@@ -691,7 +691,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		switch msg.Flags {
 
 		// A flag set of 0 indicates this is an announcement for the
-		// "first" node in the channel
+		// "first" node in the channel.
 		case 0:
 			if edge1Timestamp.After(msg.LastUpdate) ||
 				edge1Timestamp.Equal(msg.LastUpdate) {
@@ -710,7 +710,6 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 					"(flags=%v) for known chan_id=%v", msg.Flags,
 					msg.ChannelID)
 			}
-
 		}
 
 		if !exists {

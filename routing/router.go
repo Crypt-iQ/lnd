@@ -561,15 +561,26 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 			msg.PubKey.SerializeCompressed())
 
 	case *channeldb.ChannelEdgeInfo:
-		// Prior to processing the announcement we first check if we
-		// already know of this channel, if so, then we can exit early.
-		_, _, exists, err := r.cfg.Graph.HasChannelEdge(msg.ChannelID)
-		if err != nil && err != channeldb.ErrGraphNoEdgesFound {
-			return errors.Errorf("unable to check for edge "+
-				"existence: %v", err)
-		} else if exists {
-			return newErrf(ErrIgnored, "Ignoring msg for known "+
-				"chan_id=%v", msg.ChannelID)
+		// Because the fundingmanager sends one private ChannelAnnouncement
+		// and one public ChannelAnnouncement, it is possible that we may
+		// need to replace the private ChannelEdgeInfo with a public one.
+		chanInfo, _, _, err := r.GetChannelByID(
+			lnwire.NewShortChanIDFromInt(msg.ChannelID))
+		if err != nil {
+			return errors.Errorf("unable to retrieve channel by "+
+				"channel id: %v", err)
+		}
+
+		// If chanInfo exists, check that we can replace it
+		if chanInfo != nil {
+			if chanInfo.Private && !msg.Private {
+				// We can replace existing ChannelEdgeInfo
+			} else {
+				// TODO(eugene) - true can replace true?
+				// We cannot replace existing ChannelEdgeInfo
+				return newErrf(ErrIgnored, "Ignoring msg for "+
+					"known chan_id=%v", msg.ChannelID)
+			}
 		}
 
 		// Query the database for the existence of the two nodes in this
@@ -650,17 +661,31 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// after commitment fees are dynamic.
 		msg.Capacity = btcutil.Amount(chanUtxo.Value)
 		msg.ChannelPoint = *fundingPoint
-		if err := r.cfg.Graph.AddChannelEdge(msg); err != nil {
-			return errors.Errorf("unable to add edge: %v", err)
+		if chanInfo == nil {
+			if err := r.cfg.Graph.AddChannelEdge(msg); err != nil {
+				return errors.Errorf("unable to add edge: %v", err)
+			}
+			log.Infof("New channel discovered! Link "+
+				"connects %x and %x with ChannelPoint(%v): "+
+				"chan_id=%v, capacity=%v",
+				msg.NodeKey1.SerializeCompressed(),
+				msg.NodeKey2.SerializeCompressed(),
+				fundingPoint, msg.ChannelID, msg.Capacity)
+		} else {
+			err := r.cfg.Graph.UpdateChannelEdge(msg)
+			if err != nil {
+				return errors.Errorf("unable to update "+
+					"edge: %v", err)
+			}
+			log.Infof("Channel updated! Link "+
+				"connects %x and %x with ChannelPoint(%v): "+
+				"chan_id=%v, capacity=%v",
+				msg.NodeKey1.SerializeCompressed(),
+				msg.NodeKey2.SerializeCompressed(),
+				fundingPoint, msg.ChannelID, msg.Capacity)
 		}
 
 		invalidateCache = true
-		log.Infof("New channel discovered! Link "+
-			"connects %x and %x with ChannelPoint(%v): "+
-			"chan_id=%v, capacity=%v",
-			msg.NodeKey1.SerializeCompressed(),
-			msg.NodeKey2.SerializeCompressed(),
-			fundingPoint, msg.ChannelID, msg.Capacity)
 
 		// As a new edge has been added to the channel graph, we'll
 		// update the current UTXO filter within our active

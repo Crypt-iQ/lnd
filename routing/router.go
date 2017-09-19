@@ -698,6 +698,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 				return newErrf(ErrIgnored, "Ignoring announcement "+
 					"(flags=%v) for known chan_id=%v", msg.Flags,
 					msg.ChannelID)
+
 			}
 
 		// Similarly, a flag set of 1 indicates this is an announcement

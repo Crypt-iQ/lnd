@@ -1110,7 +1110,9 @@ func (f *fundingManager) handleFundingCreated(fmsg *fundingCreatedMsg) {
 	// completely forget about this channel if we haven't seen the funding
 	// transaction in 288 blocks (~ 48 hrs), by canceling the reservation
 	// and canceling the wait for the funding confirmation.
+	f.wg.Add(1)
 	go func() {
+		defer f.wg.Done()
 		confChan := make(chan *lnwire.ShortChannelID)
 		timeoutChan := make(chan struct{})
 		go f.waitForFundingWithTimeout(completeChan, confChan,

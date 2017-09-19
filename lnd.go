@@ -186,6 +186,11 @@ func lndMain() error {
 				idPrivKey.PubKey())
 			return <-errChan
 		},
+		SendToGossiper: func(msg lnwire.Message) error {
+			errChan := server.authGossiper.ProcessLocalAnnouncement(msg,
+				idPrivKey.PubKey())
+			return <-errChan
+		},
 		ArbiterChan:    server.breachArbiter.newContracts,
 		SendToPeer:     server.SendToPeer,
 		FindPeer:       server.FindPeer,

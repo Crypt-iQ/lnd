@@ -880,31 +880,6 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			return nil
 		}
 
-		// If this ChannelUpdate is private, exchange ChannelUpdates
-		// with our peer.
-		if msg.Private {
-			isFirstNode := bytes.Equal(nMsg.peer.SerializeCompressed(),
-				chanInfo.NodeKey1.SerializeCompressed())
-
-			// Check that first node of the channel info
-			// corresponds to us.
-			var remotePeer *btcec.PublicKey
-			if isFirstNode {
-				remotePeer = chanInfo.NodeKey2
-			} else {
-				remotePeer = chanInfo.NodeKey1
-			}
-
-			err := d.cfg.SendToPeer(remotePeer, msg)
-			if err != nil {
-				log.Errorf("unable to send private channel "+
-					"update to peer: %x",
-					remotePeer.SerializeCompressed())
-				nMsg.err <- err
-				return nil
-			}
-		}
-
 		// Channel update announcement was successfully processed and
 		// now it can be broadcast to the rest of the network. However,
 		// we'll only broadcast the channel update announcement if it

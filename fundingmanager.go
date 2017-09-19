@@ -190,6 +190,11 @@ type fundingConfig struct {
 	// channel's funding transaction and initial commitment transaction.
 	SendToPeer func(target *btcec.PublicKey, msgs ...lnwire.Message) error
 
+	// SendToGossiper is used by the FundingManager to send private
+	// ChannelAnnouncement and ChannelUpdate messages to our peer via the
+	// gossiper without it being broadcasted.
+	SendToGossiper func(msg lnwire.Message) error
+
 	// FindPeer searches the list of peers connected to the node so that
 	// the FundingManager can notify other daemon subsystems as necessary
 	// during the funding process.
@@ -305,6 +310,12 @@ const (
 	// fundingLocked message has successfully been sent to the other peer,
 	// but we still haven't announced the channel to the network.
 	fundingLockedSent
+
+	// addedToRouterGraph is the opening state of a channel if the
+	// channel has been successfully added to the router graph
+	// immediately after the fundingLocked message has been sent, but
+	// we still haven't announced the channel to the network.
+	addedToRouterGraph
 )
 
 var (
@@ -1547,15 +1558,45 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	ann.chanAnn.Private = true
 	ann.chanUpdateAnn.Private = true
 
-	// Send ChannelAnnouncement and ChannelUpdate to the gossiper for
-	// processing.
-	if err = f.cfg.SendAnnouncement(ann.chanAnn); err != nil {
+	// Send ChannelAnnouncement and ChannelUpdate to the gossiper to add
+	// to the Router's topology.
+	if err = f.cfg.SendToGossiper(ann.chanAnn); err != nil {
 		return fmt.Errorf("error sending private channel "+
 			"announcement: %v", err)
 	}
-	if err = f.cfg.SendAnnouncement(ann.chanUpdateAnn); err != nil {
+	if err = f.cfg.SendToGossiper(ann.chanUpdateAnn); err != nil {
 		return fmt.Errorf("error sending private channel "+
 			"update: %v", err)
+	}
+
+	// Check which public key belongs to our peer so we can send our
+	// ChannelUpdate message to our peer.
+	var remoteKey *btcec.PublicKey
+	switch ann.chanUpdateAnn.Flags {
+	case 0:
+		remoteKey = ann.chanAnn.NodeID2
+	case 1:
+		remoteKey = ann.chanAnn.NodeID1
+	}
+
+	// Send the ChannelUpdate message
+	if err = f.cfg.SendToPeer(remoteKey, ann.chanUpdateAnn); err != nil {
+		return fmt.Errorf("error sending private channel update to " +
+			"peer(%x): %v", remoteKey.SerializeCompressed(), err)
+	}
+
+	// TODO(eugene) should we wait for our peer to send us their
+	// ChannelEdgePolicy?
+
+	// As the channel is now added to the ChannelRouter's topology, the
+	// channel is moved to the next state of the state machine. It will be
+	// moved to the last state (actually deleted from the database) after
+	// the channel is finally announced.
+	err = f.saveChannelOpeningState(&completeChan.FundingOutpoint, addedToRouterGraph,
+		shortChanID)
+	if err != nil {
+		return fmt.Errorf("error setting channel state to"+
+			" addedToRouterGraph: %v", err)
 	}
 
 	return nil
@@ -1563,8 +1604,8 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 
 // sendChannelAnnouncement broadcast the necessary channel announcement
 // messages to the network. Should be called after the fundingLocked message
-// is sent (channelState is 'fundingLockedSent') and the channel is ready to
-// be used.
+// is sent and the channel is added to the router graph (channelState is
+// 'addedToRouterGraph') and the channel is ready to be used.
 func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenChannel,
 	channel *lnwallet.LightningChannel, shortChanID *lnwire.ShortChannelID) error {
 

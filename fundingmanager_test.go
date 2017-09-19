@@ -186,6 +186,14 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 			}
 			return nil
 		},
+		SendToGossiper: func(msg lnwire.Message) error {
+			select {
+			case sentAnnouncements <- msg:
+			case <-shutdownChan:
+				return fmt.Errorf("shutting down")
+			}
+			return nil
+		},
 		CurrentNodeAnnouncement: func() (lnwire.NodeAnnouncement, error) {
 			return lnwire.NodeAnnouncement{}, nil
 		},
@@ -245,6 +253,10 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 			return nil, nil
 		},
 		SendAnnouncement: func(msg lnwire.Message) error {
+			aliceAnnounceChan <- msg
+			return nil
+		},
+		SendToGossiper: func(msg lnwire.Message) error {
 			aliceAnnounceChan <- msg
 			return nil
 		},
@@ -602,6 +614,107 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
 	}
 
+	// After the FundingLocked message is sent, Alice & Bob will each send
+	// three private announcement messages:
+	//      1) ChannelAnnouncement
+	//      2) ChannelUpdate
+	//      3) ChannelUpdate
+	// The only message of the three that will reach the peer is the second
+	// ChannelUpdate message. The second channel announcement is sent via
+	// SendToPeer.
+	privateAnns := make([]lnwire.Message, 3)
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-alice.announceChan:
+		case privateAnns[i] = <-alice.msgChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("alice did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement := false
+	gotPrivateChannelUpdate1 := false
+	gotPrivateChannelUpdate2 := false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			if gotPrivateChannelUpdate1 {
+				gotPrivateChannelUpdate2 = true
+			} else {
+				gotPrivateChannelUpdate1 = true
+			}
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Alice")
+	}
+	if !gotPrivateChannelUpdate1 {
+		t.Fatalf("did not get private ChannelUpdate 1 from Alice")
+	}
+	if !gotPrivateChannelUpdate2 {
+		t.Fatalf("did not get private ChannelUpdate 2 from Alice")
+	}
+
+	// Do the check for Bob as well
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-bob.announceChan:
+		case privateAnns[i] = <-bob.msgChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("bob did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement = false
+	gotPrivateChannelUpdate1 = false
+	gotPrivateChannelUpdate2 = false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			if gotPrivateChannelUpdate1 {
+				gotPrivateChannelUpdate2 = true
+			} else {
+				gotPrivateChannelUpdate1 = true
+			}
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Bob")
+	}
+	if !gotPrivateChannelUpdate1 {
+		t.Fatalf("did not get private ChannelUpdate 1 from Bob")
+	}
+	if !gotPrivateChannelUpdate2 {
+		t.Fatalf("did not get private ChannelUpdate 2 from Bob")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the state machine is updated accordingly
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+
 	// After the FundingLocked message is sent, the channel will be announced.
 	// A chanAnnouncement consists of three distinct messages:
 	//	1) ChannelAnnouncement
@@ -609,7 +722,7 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	//	3) AnnounceSignatures
 	// that will be announced in no particular order.
 	// A node announcement will also be sent.
-	announcements := make([]lnwire.Message, 6)
+	announcements := make([]lnwire.Message, 4)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:

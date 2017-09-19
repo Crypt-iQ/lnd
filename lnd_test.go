@@ -2699,7 +2699,7 @@ func testGraphTopologyNotifications(net *networkHarness, t *harnessTest) {
 	// The channel opening above should've triggered a few notifications
 	// sent to the notification client. We'll expect two channel updates,
 	// and two node announcements.
-	const numExpectedUpdates = 5
+	const numExpectedUpdates = 4
 	for i := 0; i < numExpectedUpdates; i++ {
 		select {
 		// Ensure that a new update for both created edges is properly

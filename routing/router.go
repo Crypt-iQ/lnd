@@ -566,7 +566,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// need to replace the private ChannelEdgeInfo with a public one.
 		chanInfo, _, _, err := r.GetChannelByID(
 			lnwire.NewShortChanIDFromInt(msg.ChannelID))
-		if err != nil {
+		if err != nil && err != channeldb.ErrEdgeNotFound {
 			return errors.Errorf("unable to retrieve channel by "+
 				"channel id: %v", err)
 		}
@@ -586,7 +586,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// Query the database for the existence of the two nodes in this
 		// channel. If not found, add a partial node to the database,
 		// containing only the node keys.
-		_, exists, _ = r.cfg.Graph.HasLightningNode(msg.NodeKey1)
+		_, exists, _ := r.cfg.Graph.HasLightningNode(msg.NodeKey1)
 		if !exists {
 			node1 := &channeldb.LightningNode{
 				PubKey:               msg.NodeKey1,
@@ -709,33 +709,54 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 
 		}
 
+		// We retrieve the channel to see that even if this policy
+		// has the same timestamp as the stored policy, if the stored
+		// policy has the private field set to true, and this policy
+		// does not, we can proceed.
+		_, e1, e2, err := r.GetChannelByID(
+			lnwire.NewShortChanIDFromInt(msg.ChannelID))
+		if err != nil && err != channeldb.ErrEdgeNotFound {
+			return errors.Errorf("unable to retrieve channel by "+
+				"channel id: %v", err)
+		}
+
 		// As edges are directional edge node has a unique policy for
 		// the direction of the edge they control. Therefore we first
 		// check if we already have the most up to date information for
-		// that edge. If so, then we can exit early.
+		// that edge. If so, then we can exit early. The only exception
+		// is replacing a private policy with a public policy, even if
+		// they are otherwise exactly the same.
 		switch msg.Flags {
 
 		// A flag set of 0 indicates this is an announcement for the
-		// "first" node in the channel.
+		// "first" node in the channel
 		case 0:
-			if edge1Timestamp.After(msg.LastUpdate) ||
-				edge1Timestamp.Equal(msg.LastUpdate) {
-				return newErrf(ErrIgnored, "Ignoring announcement "+
-					"(flags=%v) for known chan_id=%v", msg.Flags,
-					msg.ChannelID)
-
+			if e1 != nil && e1.Private && !msg.Private {
+				// fallthrough
+			} else {
+				if edge1Timestamp.After(msg.LastUpdate) ||
+					edge1Timestamp.Equal(msg.LastUpdate) {
+					return newErrf(ErrIgnored, "Ignoring announcement " +
+						"(flags=%v) for known chan_id=%v", msg.Flags,
+						msg.ChannelID)
+				}
 			}
 
 		// Similarly, a flag set of 1 indicates this is an announcement
 		// for the "second" node in the channel.
 		case 1:
-			if edge2Timestamp.After(msg.LastUpdate) ||
-				edge2Timestamp.Equal(msg.LastUpdate) {
+			if e2 != nil && e2.Private && !msg.Private {
+				// fallthrough
+			} else {
+				if edge2Timestamp.After(msg.LastUpdate) ||
+					edge2Timestamp.Equal(msg.LastUpdate) {
 
-				return newErrf(ErrIgnored, "Ignoring announcement "+
-					"(flags=%v) for known chan_id=%v", msg.Flags,
-					msg.ChannelID)
+					return newErrf(ErrIgnored, "Ignoring announcement " +
+						"(flags=%v) for known chan_id=%v", msg.Flags,
+						msg.ChannelID)
+				}
 			}
+
 		}
 
 		if !exists {

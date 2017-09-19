@@ -1714,6 +1714,9 @@ func putChanEdgeInfo(edgeIndex *bolt.Bucket, edgeInfo *ChannelEdgeInfo, chanID [
 	if _, err := b.Write(edgeInfo.ChainHash[:]); err != nil {
 		return err
 	}
+	if err := binary.Write(&b, byteOrder, edgeInfo.Private); err != nil {
+		return err
+	}
 
 	return edgeIndex.Put(chanID[:], b.Bytes())
 }
@@ -1818,6 +1821,10 @@ func deserializeChanEdgeInfo(r io.Reader) (*ChannelEdgeInfo, error) {
 		return nil, err
 	}
 
+	if err := binary.Read(r, byteOrder, &edgeInfo.Private); err != nil {
+		return nil, err
+	}
+
 	return edgeInfo, nil
 }
 
@@ -1857,6 +1864,9 @@ func putChanEdgePolicy(edges *bolt.Bucket, edge *ChannelEdgePolicy, from, to []b
 		return err
 	}
 	if err := binary.Write(&b, byteOrder, uint64(edge.FeeProportionalMillionths)); err != nil {
+		return err
+	}
+	if err := binary.Write(&b, byteOrder, edge.Private); err != nil {
 		return err
 	}
 
@@ -1973,6 +1983,10 @@ func deserializeChanEdgePolicy(r io.Reader,
 		return nil, err
 	}
 	edge.FeeProportionalMillionths = lnwire.MilliSatoshi(n)
+
+	if err := binary.Read(r, byteOrder, &edge.Private); err != nil {
+		return nil, err
+	}
 
 	var pub [33]byte
 	if _, err := r.Read(pub[:]); err != nil {

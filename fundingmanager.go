@@ -472,6 +472,7 @@ func (f *fundingManager) Start() error {
 
 		case fundingLockedSent:
 			// fundingLocked was sent to peer, but the channel
+			// was not added to the router graph and the channel
 			// announcement was not sent.
 			f.wg.Add(1)
 			go func() {
@@ -486,7 +487,38 @@ func (f *fundingManager) Start() error {
 				}
 				defer lnChannel.Stop()
 
-				// TODO(eugene) add to router graph
+				err = f.addToRouterGraph(channel, lnChannel,
+					shortChanID)
+				if err != nil {
+					fndgLog.Errorf("failed adding to "+
+						"router graph: %v", err)
+					return
+				}
+				err = f.sendChannelAnnouncement(channel, lnChannel,
+					shortChanID)
+				if err != nil {
+					fndgLog.Errorf("error sending channel "+
+						"announcement: %v", err)
+					return
+				}
+			}()
+
+		case addedToRouterGraph:
+			// The channel was added to the Router's topology, but
+			// the channel announcement was not sent.
+			f.wg.Add(1)
+			go func() {
+				defer f.wg.Done()
+
+				lnChannel, err := lnwallet.NewLightningChannel(
+					nil, nil, f.cfg.FeeEstimator, channel)
+				if err != nil {
+					fndgLog.Errorf("error creating "+
+						"lightning channel: %v", err)
+					return
+				}
+				defer lnChannel.Stop()
+
 				err = f.sendChannelAnnouncement(channel, lnChannel,
 					shortChanID)
 				if err != nil {
@@ -1581,7 +1613,7 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 
 	// Send the ChannelUpdate message
 	if err = f.cfg.SendToPeer(remoteKey, ann.chanUpdateAnn); err != nil {
-		return fmt.Errorf("error sending private channel update to " +
+		return fmt.Errorf("error sending private channel update to "+
 			"peer(%x): %v", remoteKey.SerializeCompressed(), err)
 	}
 

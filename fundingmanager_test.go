@@ -609,7 +609,7 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	//	3) AnnounceSignatures
 	// that will be announced in no particular order.
 	// A node announcement will also be sent.
-	announcements := make([]lnwire.Message, 4)
+	announcements := make([]lnwire.Message, 6)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
@@ -853,7 +853,7 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	}
 
 	// Bob, however, should send the announcements
-	announcements := make([]lnwire.Message, 4)
+	announcements := make([]lnwire.Message, 6)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-bob.announceChan:
@@ -897,7 +897,7 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// messages on restart.
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
-	for i := 0; i < len(announcements); i++ {
+	for i := 0; i < len(announcements)-2; i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
 		case <-time.After(time.Second * 5):

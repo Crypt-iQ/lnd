@@ -566,7 +566,8 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// need to replace the private ChannelEdgeInfo with a public one.
 		chanInfo, _, _, err := r.GetChannelByID(
 			lnwire.NewShortChanIDFromInt(msg.ChannelID))
-		if err != nil && err != channeldb.ErrEdgeNotFound {
+		if err != nil && err != channeldb.ErrEdgeNotFound &&
+			err != channeldb.ErrGraphNoEdgesFound {
 			return errors.Errorf("unable to retrieve channel by "+
 				"channel id: %v", err)
 		}
@@ -736,7 +737,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 			} else {
 				if edge1Timestamp.After(msg.LastUpdate) ||
 					edge1Timestamp.Equal(msg.LastUpdate) {
-					return newErrf(ErrIgnored, "Ignoring announcement " +
+					return newErrf(ErrIgnored, "Ignoring announcement "+
 						"(flags=%v) for known chan_id=%v", msg.Flags,
 						msg.ChannelID)
 				}
@@ -751,7 +752,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 				if edge2Timestamp.After(msg.LastUpdate) ||
 					edge2Timestamp.Equal(msg.LastUpdate) {
 
-					return newErrf(ErrIgnored, "Ignoring announcement " +
+					return newErrf(ErrIgnored, "Ignoring announcement "+
 						"(flags=%v) for known chan_id=%v", msg.Flags,
 						msg.ChannelID)
 				}

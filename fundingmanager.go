@@ -1594,22 +1594,6 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 			"update: %v", err)
 	}
 
-	// Check which public key belongs to our peer so we can send our
-	// ChannelUpdate message to our peer.
-	var remoteKey *btcec.PublicKey
-	switch ann.chanUpdateAnn.Flags {
-	case 0:
-		remoteKey = ann.chanAnn.NodeID2
-	case 1:
-		remoteKey = ann.chanAnn.NodeID1
-	}
-
-	// Send the ChannelUpdate message
-	if err = f.cfg.SendToPeer(remoteKey, ann.chanUpdateAnn); err != nil {
-		return fmt.Errorf("error sending private channel update to "+
-			"peer(%x): %v", remoteKey.SerializeCompressed(), err)
-	}
-
 	// As the channel is now added to the ChannelRouter's topology, the
 	// channel is moved to the next state of the state machine. It will be
 	// moved to the last state (actually deleted from the database) after

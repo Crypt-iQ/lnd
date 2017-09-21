@@ -78,6 +78,8 @@ type server struct {
 
 	sphinx *htlcswitch.OnionProcessor
 
+	sphinxRouter *sphinx.Router
+
 	connMgr *connmgr.ConnManager
 
 	// globalFeatures feature vector which affects HTLCs and thus are also
@@ -113,6 +115,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		}
 	}
 
+	sphinxRouter := sphinx.NewRouter(privKey, activeNetParams.Params,
+		cc.chainNotifier)
+
 	serializedPubKey := privKey.PubKey().SerializeCompressed()
 	s := &server{
 		chanDB: chanDB,
@@ -127,9 +132,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 		// TODO(roasbeef): derive proper onion key based on rotation
 		// schedule
-		sphinx: htlcswitch.NewOnionProcessor(
-			sphinx.NewRouter(privKey, activeNetParams.Params)),
-		lightningID: sha256.Sum256(serializedPubKey),
+		sphinx:       htlcswitch.NewOnionProcessor(sphinxRouter),
+		sphinxRouter: sphinxRouter,
+		lightningID:  sha256.Sum256(serializedPubKey),
 
 		persistentPeers:    make(map[string]struct{}),
 		persistentConnReqs: make(map[string][]*connmgr.ConnReq),
@@ -370,6 +375,9 @@ func (s *server) Start() error {
 	if err := s.chanRouter.Start(); err != nil {
 		return err
 	}
+	if err := s.sphinxRouter.Start(); err != nil {
+		return err
+	}
 
 	// With all the relevant sub-systems started, we'll now attempt to
 	// establish persistent connections to our direct channel collaborators
@@ -419,6 +427,7 @@ func (s *server) Stop() error {
 	s.cc.wallet.Shutdown()
 	s.cc.chainView.Stop()
 	s.connMgr.Stop()
+	s.sphinxRouter.Stop()
 
 	// Disconnect from each active peers to ensure that
 	// peerTerminationWatchers signal completion to each peer.

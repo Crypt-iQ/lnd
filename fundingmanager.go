@@ -1919,10 +1919,7 @@ func (f *fundingManager) announceChannel(localIDKey, remoteIDKey, localFundingKe
 		return err
 	}
 
-	if err = f.cfg.SendLocalAnnouncement(&nodeAnn); err != nil {
-		return err
-	}
-	return nil
+	return f.cfg.SendLocalAnnouncement(&nodeAnn)
 }
 
 // initFundingWorkflow sends a message to the funding manager instructing it
@@ -2190,10 +2187,7 @@ func (f *fundingManager) saveChannelOpeningState(chanPoint *wire.OutPoint,
 		byteOrder.PutUint16(scratch[:2], uint16(state))
 		byteOrder.PutUint64(scratch[2:], shortChanID.ToUint64())
 
-		if err = bucket.Put(outpointBytes.Bytes(), scratch); err != nil {
-			return err
-		}
-		return nil
+		return bucket.Put(outpointBytes.Bytes(), scratch)
 	})
 }
 
@@ -2248,9 +2242,6 @@ func (f *fundingManager) deleteChannelOpeningState(chanPoint *wire.OutPoint) err
 			return err
 		}
 
-		if err := bucket.Delete(outpointBytes.Bytes()); err != nil {
-			return err
-		}
-		return nil
+		return bucket.Delete(outpointBytes.Bytes())
 	})
 }

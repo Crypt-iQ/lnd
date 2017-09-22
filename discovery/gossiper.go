@@ -1208,6 +1208,7 @@ func (d *AuthenticatedGossiper) synchronizeWithNode(syncReq *syncRequest) error 
 			Alias:     alias,
 			Features:  node.Features,
 		}
+
 		announceMessages = append(announceMessages, ann)
 
 		numNodes++

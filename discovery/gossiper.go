@@ -471,7 +471,10 @@ func (d *AuthenticatedGossiper) networkHandler() {
 					BaseFee:         uint32(p.FeeBaseMSat),
 					FeeRate:         uint32(p.FeeProportionalMillionths),
 				}
-				selfChans = append(selfChans, c)
+
+				if ei.AuthProof != nil {
+					selfChans = append(selfChans, c)
+				}
 				return nil
 			})
 			if err != nil {

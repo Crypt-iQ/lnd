@@ -327,6 +327,10 @@ var openChannelCommand = cli.Command{
 			Name:  "block",
 			Usage: "block and wait until the channel is fully open",
 		},
+		cli.BoolFlag{
+			Name:  "private",
+			Usage: "don't announce channel to the greater network",
+		},
 	},
 	Action: openChannel,
 }

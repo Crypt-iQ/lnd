@@ -490,7 +490,7 @@ func (f *fundingManager) Start() error {
 						"router graph: %v", err)
 					return
 				}
-				err = f.sendChannelAnnouncement(channel, lnChannel,
+				err = f.annAfterSixConfs(channel, lnChannel,
 					shortChanID)
 				if err != nil {
 					fndgLog.Errorf("error sending channel "+
@@ -515,7 +515,7 @@ func (f *fundingManager) Start() error {
 				}
 				defer lnChannel.Stop()
 
-				err = f.sendChannelAnnouncement(channel, lnChannel,
+				err = f.annAfterSixConfs(channel, lnChannel,
 					shortChanID)
 				if err != nil {
 					fndgLog.Errorf("error sending channel "+
@@ -1492,7 +1492,7 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 
 // handleFundingConfirmation is a wrapper method for creating a new
 // lnwallet.LightningChannel object, calling sendFundingLocked, addToRouterGraph,
-// and sendChannelAnnouncement. This is called after the funding transaction is
+// and annAfterSixConfs. This is called after the funding transaction is
 // confirmed.
 func (f *fundingManager) handleFundingConfirmation(completeChan *channeldb.OpenChannel,
 	shortChanID *lnwire.ShortChannelID) error {
@@ -1513,7 +1513,7 @@ func (f *fundingManager) handleFundingConfirmation(completeChan *channeldb.OpenC
 	if err != nil {
 		return fmt.Errorf("failed adding to router graph: %v", err)
 	}
-	err = f.sendChannelAnnouncement(completeChan, lnChannel, shortChanID)
+	err = f.annAfterSixConfs(completeChan, lnChannel, shortChanID)
 	if err != nil {
 		return fmt.Errorf("failed sending channel announcement: %v",
 			err)
@@ -1562,8 +1562,8 @@ func (f *fundingManager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 
 // addToRouterGraph sends a private ChannelAnnouncement and a private
 // ChannelUpdate to the gossiper so that it is added to the Router's internal
-// graph before the actual channel announcements are called in
-// sendChannelAnnouncement. These private announcement messages are NOT
+// graph before the announcement_signatures is sent in
+// annAfterSixConfs. These private announcement messages are NOT
 // broadcasted to the greater network.
 func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	channel *lnwallet.LightningChannel,
@@ -1604,14 +1604,36 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	return nil
 }
 
-// sendChannelAnnouncement broadcast the necessary channel announcement
-// messages to the network. Should be called after the fundingLocked message
+// annAfterSixConfs broadcasts the necessary channel announcement messages to
+// the network after 6 confs. Should be called after the fundingLocked message
 // is sent and the channel is added to the router graph (channelState is
 // 'addedToRouterGraph') and the channel is ready to be used.
-func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenChannel,
+func (f *fundingManager) annAfterSixConfs(completeChan *channeldb.OpenChannel,
 	channel *lnwallet.LightningChannel, shortChanID *lnwire.ShortChannelID) error {
 
-	// TODO(eugene) wait for 6 confirmations here
+	// Register with the ChainNotifier for a notification once the
+	// funding transaction reaches 6 confirmations.
+	txid := completeChan.FundingOutpoint.Hash
+	confNtfn, err := f.cfg.Notifier.RegisterConfirmationsNtfn(&txid, 6,
+		completeChan.FundingBroadcastHeight)
+	if err != nil {
+		return fmt.Errorf("Unable to register for confirmation of "+
+			"ChannelPoint(%v): %v", completeChan.FundingOutpoint, err)
+	}
+
+	// Wait until 6 confirmations has been reached or the wallet signals
+	// a shutdown.
+	select {
+	case _, ok := <-confNtfn.Confirmed:
+		if !ok {
+			return fmt.Errorf("ChainNotifier shutting down, cannot "+
+				"complete funding flow for ChannelPoint(%v)",
+				completeChan.FundingOutpoint)
+		}
+	case <-f.quit:
+		return fmt.Errorf("fundingManager shutting down, stopping funding "+
+			"flow for ChannelPoint(%v)", completeChan.FundingOutpoint)
+	}
 
 	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
 	fundingPoint := completeChan.FundingOutpoint
@@ -1621,7 +1643,7 @@ func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenCha
 
 	// Register the new link with the L3 routing manager so this new
 	// channel can be utilized during path finding.
-	err := f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
+	err = f.announceChannel(f.cfg.IDKey, completeChan.IdentityPub,
 		channel.LocalFundingKey, channel.RemoteFundingKey,
 		*shortChanID, chanID)
 	if err != nil {

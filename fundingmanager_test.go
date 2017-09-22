@@ -610,76 +610,58 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	// The only message of the three that will reach the peer is the second
 	// ChannelUpdate message. The second channel announcement is sent via
 	// SendToPeer.
-	privateAnns := make([]lnwire.Message, 3)
+	privateAnns := make([]lnwire.Message, 2)
 	for i := 0; i < len(privateAnns); i++ {
 		select {
 		case privateAnns[i] = <-alice.announceChan:
-		case privateAnns[i] = <-alice.msgChan:
 		case <-time.After(time.Second * 5):
 			t.Fatalf("alice did not send private announcement: %v", i)
 		}
 	}
 
 	gotPrivateChannelAnnouncement := false
-	gotPrivateChannelUpdate1 := false
-	gotPrivateChannelUpdate2 := false
+	gotPrivateChannelUpdate := false
 	for _, msg := range privateAnns {
 		switch msg.(type) {
 		case *lnwire.ChannelAnnouncement:
 			gotPrivateChannelAnnouncement = true
 		case *lnwire.ChannelUpdate:
-			if gotPrivateChannelUpdate1 {
-				gotPrivateChannelUpdate2 = true
-			} else {
-				gotPrivateChannelUpdate1 = true
-			}
+			gotPrivateChannelUpdate = true
 		}
 	}
 
 	if !gotPrivateChannelAnnouncement {
 		t.Fatalf("did not get private ChannelAnnouncement from Alice")
 	}
-	if !gotPrivateChannelUpdate1 {
-		t.Fatalf("did not get private ChannelUpdate 1 from Alice")
-	}
-	if !gotPrivateChannelUpdate2 {
-		t.Fatalf("did not get private ChannelUpdate 2 from Alice")
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Alice")
 	}
 
 	// Do the check for Bob as well
 	for i := 0; i < len(privateAnns); i++ {
 		select {
 		case privateAnns[i] = <-bob.announceChan:
-		case privateAnns[i] = <-bob.msgChan:
 		case <-time.After(time.Second * 5):
 			t.Fatalf("bob did not send private announcement: %v", i)
 		}
 	}
 
 	gotPrivateChannelAnnouncement = false
-	gotPrivateChannelUpdate1 = false
-	gotPrivateChannelUpdate2 = false
+	gotPrivateChannelUpdate = false
 	for _, msg := range privateAnns {
 		switch msg.(type) {
 		case *lnwire.ChannelAnnouncement:
 			gotPrivateChannelAnnouncement = true
 		case *lnwire.ChannelUpdate:
-			if gotPrivateChannelUpdate1 {
-				gotPrivateChannelUpdate2 = true
-			} else {
-				gotPrivateChannelUpdate1 = true
-			}
+			gotPrivateChannelUpdate = true
 		}
 	}
 
 	if !gotPrivateChannelAnnouncement {
 		t.Fatalf("did not get private ChannelAnnouncement from Bob")
 	}
-	if !gotPrivateChannelUpdate1 {
-		t.Fatalf("did not get private ChannelUpdate 1 from Bob")
-	}
-	if !gotPrivateChannelUpdate2 {
-		t.Fatalf("did not get private ChannelUpdate 2 from Bob")
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Bob")
 	}
 
 	// Sleep to make sure database write is finished.
@@ -702,6 +684,12 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	if state != addedToRouterGraph {
 		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
 	}
+
+	// Notify Alice & Bob that funding tx reached 6 confirmations, they
+	// can now send announcement_signatures and the node announcement
+	// messages.
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 
 	// After the FundingLocked message is sent, the channel will be announced.
 	// A chanAnnouncement consists of three distinct messages:
@@ -897,11 +885,6 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
 
-	// Intentionally make the private channel announcements fail
-	alice.fundingMgr.cfg.SendToGossiper = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendToGossiper")
-	}
-
 	// Intentionally make the public channel announcements fail
 	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
 		return fmt.Errorf("intentional error in SendLocalAnnouncement")
@@ -936,40 +919,31 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 
 	// Bob, however, should send the announcements:
 	// The private announcements
-	privateAnns := make([]lnwire.Message, 3)
+	privateAnns := make([]lnwire.Message, 2)
 	for i := 0; i < len(privateAnns); i++ {
 		select {
 		case privateAnns[i] = <-bob.announceChan:
-		case privateAnns[i] = <-bob.msgChan:
 		case <-time.After(time.Second * 5):
 			t.Fatalf("bob did not send private announcement: %v", i)
 		}
 	}
 
 	gotPrivateChannelAnnouncement := false
-	gotPrivateChannelUpdate1 := false
-	gotPrivateChannelUpdate2 := false
+	gotPrivateChannelUpdate := false
 	for _, msg := range privateAnns {
 		switch msg.(type) {
 		case *lnwire.ChannelAnnouncement:
 			gotPrivateChannelAnnouncement = true
 		case *lnwire.ChannelUpdate:
-			if gotPrivateChannelUpdate1 {
-				gotPrivateChannelUpdate2 = true
-			} else {
-				gotPrivateChannelUpdate1 = true
-			}
+			gotPrivateChannelUpdate = true
 		}
 	}
 
 	if !gotPrivateChannelAnnouncement {
 		t.Fatalf("did not get private ChannelAnnouncement from Bob")
 	}
-	if !gotPrivateChannelUpdate1 {
+	if !gotPrivateChannelUpdate {
 		t.Fatalf("did not get private ChannelUpdate 1 from Bob")
-	}
-	if !gotPrivateChannelUpdate2 {
-		t.Fatalf("did not get private ChannelUpdate 2 from Bob")
 	}
 
 	// Sleep to make sure database write is finished.
@@ -984,6 +958,10 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	if state != addedToRouterGraph {
 		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
 	}
+
+	// Notify Bob that funding tx reached 6 confirmations, he can now
+	// send announcement_signatures and the node announcement messages.
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 
 	// And the public announcements
 	announcements := make([]lnwire.Message, 2)
@@ -1019,45 +997,31 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
 
-	// Intentionally make the next channel announcement fail
-	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendLocalAnnouncement")
-	}
-
 	// The private announcements
 	for i := 0; i < len(privateAnns); i++ {
 		select {
 		case privateAnns[i] = <-alice.announceChan:
-		case privateAnns[i] = <-alice.msgChan:
 		case <-time.After(time.Second * 5):
 			t.Fatalf("alice did not send private announcement: %v", i)
 		}
 	}
 
 	gotPrivateChannelAnnouncement = false
-	gotPrivateChannelUpdate1 = false
-	gotPrivateChannelUpdate2 = false
+	gotPrivateChannelUpdate = false
 	for _, msg := range privateAnns {
 		switch msg.(type) {
 		case *lnwire.ChannelAnnouncement:
 			gotPrivateChannelAnnouncement = true
 		case *lnwire.ChannelUpdate:
-			if gotPrivateChannelUpdate1 {
-				gotPrivateChannelUpdate2 = true
-			} else {
-				gotPrivateChannelUpdate1 = true
-			}
+			gotPrivateChannelUpdate = true
 		}
 	}
 
 	if !gotPrivateChannelAnnouncement {
 		t.Fatalf("did not get private ChannelAnnouncement from Alice")
 	}
-	if !gotPrivateChannelUpdate1 {
+	if !gotPrivateChannelUpdate {
 		t.Fatalf("did not get private ChannelUpdate 1 from Alice")
-	}
-	if !gotPrivateChannelUpdate2 {
-		t.Fatalf("did not get private ChannelUpdate 2 from Alice")
 	}
 
 	// Sleep to make sure database write is finished.
@@ -1077,6 +1041,10 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// messages on restart.
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
+
+	// Notify Alice that funding tx reached 6 confirmations, she can now
+	// send announcement_signatures and the node announcement messages.
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 
 	// And the public announcements
 	for i := 0; i < len(announcements); i++ {

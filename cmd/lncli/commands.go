@@ -399,6 +399,9 @@ func openChannel(ctx *cli.Context) error {
 		}
 	}
 
+	req.Private = ctx.Bool("private")
+	fmt.Println(req.Private)
+
 	stream, err := client.OpenChannel(ctxb, req)
 	if err != nil {
 		return err

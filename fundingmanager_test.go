@@ -1154,3 +1154,5 @@ func TestFundingManagerFundingTimeout(t *testing.T) {
 			len(pendingChannels))
 	}
 }
+
+// TODO(eugene) - TestFundingManagerPrivateChannel

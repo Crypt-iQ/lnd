@@ -715,7 +715,8 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	// number and send ErrorGeneric to remote peer if condition is
 	// violated.
 	peerIDKey := newSerializedKey(fmsg.peerAddress.IdentityKey)
-
+	fmt.Println("%v", fmsg)
+	fmt.Println("\n\n")
 	msg := fmsg.msg
 	amt := msg.FundingAmount
 
@@ -1968,7 +1969,9 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		capacity     = localAmt + remoteAmt
 		ourDustLimit = lnwallet.DefaultDustLimit()
 	)
-
+	fmt.Println("%v", msg)
+	fmt.Println("%v", msg.openChanReq.private)
+	fmt.Println("\n\n")
 	fndgLog.Infof("Initiating fundingRequest(localAmt=%v, remoteAmt=%v, "+
 		"capacity=%v, chainhash=%v, addr=%v, dustLimit=%v)", localAmt,
 		msg.pushAmt, capacity, msg.chainHash, msg.peerAddress.Address,

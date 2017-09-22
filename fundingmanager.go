@@ -254,6 +254,10 @@ type fundingManager struct {
 	// funding workflows.
 	activeReservations map[serializedPubKey]pendingChannels
 
+	// pendingChanAnnPrefs is a map which stores a pending channel's id
+	// along with its announcement preference.
+	pendingChanAnnPrefs map[[32]byte]bool
+
 	// signedReservations is a utility map that maps the permanent channel
 	// ID of a funding reservation to its temporary channel ID. This is
 	// required as mid funding flow, we switch to referencing the channel
@@ -320,6 +324,12 @@ var (
 	// of being opened.
 	channelOpeningStateBucket = []byte("channelOpeningState")
 
+	// openChanAnnPrefBucket is the database bucket used to store each
+	// channel's announcement preference signalled by the LSB of
+	// channel_flags of the open_channel message in the funding workflow.
+	// It only stores open channels' announcement preferences.
+	openChanAnnPrefBucket = []byte("open_chan_ann")
+
 	// ErrChannelNotFound is returned when we are looking for a specific
 	// channel opening state in the FundingManager's internal database, but
 	// the channel in question is not considered being in an opening state.
@@ -333,6 +343,7 @@ func newFundingManager(cfg fundingConfig) (*fundingManager, error) {
 		cfg:                   &cfg,
 		chanIDKey:             cfg.TempChanIDSeed,
 		activeReservations:    make(map[serializedPubKey]pendingChannels),
+		pendingChanAnnPrefs:   make(map[[32]byte]bool),
 		signedReservations:    make(map[lnwire.ChannelID][32]byte),
 		newChanBarriers:       make(map[lnwire.ChannelID]chan struct{}),
 		fundingMsgs:           make(chan interface{}, msgBufferSize),
@@ -624,6 +635,7 @@ func (f *fundingManager) failFundingFlow(peer *btcec.PublicKey,
 		return
 	}
 
+	delete(f.pendingChanAnnPrefs, tempChanID)
 	f.cancelReservationCtx(peer, tempChanID)
 	return
 }
@@ -715,8 +727,6 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	// number and send ErrorGeneric to remote peer if condition is
 	// violated.
 	peerIDKey := newSerializedKey(fmsg.peerAddress.IdentityKey)
-	fmt.Println("%v", fmsg)
-	fmt.Println("\n\n")
 	msg := fmsg.msg
 	amt := msg.FundingAmount
 
@@ -823,6 +833,16 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 		peerAddress: fmsg.peerAddress,
 	}
 	f.resMtx.Unlock()
+
+	// Save the announcement preference of this pending channel
+	if msg.ChannelFlags & 1 == 0 {
+		// This channel WILL be announced to the greater network later.
+		f.pendingChanAnnPrefs[msg.PendingChannelID] = false
+	} else {
+		// This channel WILL NOT be announced to the greater network
+		// later.
+		f.pendingChanAnnPrefs[msg.PendingChannelID] = true
+	}
 
 	// Using the RequiredRemoteDelay closure, we'll compute the remote CSV
 	// delay we require given the total amount of funds within the channel.
@@ -1182,6 +1202,7 @@ func (f *fundingManager) handleFundingCreated(fmsg *fundingCreatedMsg) {
 				return
 			}
 
+			delete(f.pendingChanAnnPrefs, fmsg.msg.PendingChannelID)
 			f.deleteReservationCtx(peerKey, fmsg.msg.PendingChannelID)
 		}
 	}()
@@ -1317,6 +1338,7 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 			},
 		}
 
+		delete(f.pendingChanAnnPrefs, pendingChanID)
 		f.deleteReservationCtx(peerKey, pendingChanID)
 	}()
 }
@@ -1969,9 +1991,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		capacity     = localAmt + remoteAmt
 		ourDustLimit = lnwallet.DefaultDustLimit()
 	)
-	fmt.Println("%v", msg)
-	fmt.Println("%v", msg.openChanReq.private)
-	fmt.Println("\n\n")
+
 	fndgLog.Infof("Initiating fundingRequest(localAmt=%v, remoteAmt=%v, "+
 		"capacity=%v, chainhash=%v, addr=%v, dustLimit=%v)", localAmt,
 		msg.pushAmt, capacity, msg.chainHash, msg.peerAddress.Address,
@@ -2041,6 +2061,18 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 	fndgLog.Infof("Starting funding workflow with %v for pendingID(%x)",
 		msg.peerAddress.Address, chanID)
 
+	// Save the announcement preference of this pending channel
+	var channelFlags byte
+	if msg.openChanReq.private {
+		// This channel will be private
+		channelFlags = 1
+		f.pendingChanAnnPrefs[chanID] = true
+	} else {
+		// This channel will be publicly announced to the greater network.
+		channelFlags = 0
+		f.pendingChanAnnPrefs[chanID] = false
+	}
+
 	fundingOpen := lnwire.OpenChannel{
 		ChainHash:            *f.cfg.Wallet.Cfg.NetParams.GenesisHash,
 		PendingChannelID:     chanID,
@@ -2058,6 +2090,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		PaymentPoint:         ourContribution.PaymentBasePoint,
 		DelayedPaymentPoint:  ourContribution.DelayBasePoint,
 		FirstCommitmentPoint: ourContribution.FirstCommitmentPoint,
+		ChannelFlags:         channelFlags,
 	}
 	if err := f.cfg.SendToPeer(peerKey, &fundingOpen); err != nil {
 		fndgLog.Errorf("Unable to send funding request message: %v", err)
@@ -2188,6 +2221,22 @@ func copyPubKey(pub *btcec.PublicKey) *btcec.PublicKey {
 		X:     pub.X,
 		Y:     pub.Y,
 	}
+}
+
+// saveOpenChanAnnPref saves an open channel's announcement preference.
+func (f *fundingManager) saveOpenChanAnnPref(chanPoint *wire.OutPoint,
+	pref bool) error {
+	return nil
+}
+
+// getOpenChanAnnPref retrives an open channel's announcement preference.
+func (f *fundingManager) getOpenChanAnnPref(chanPoint *wire.OutPoint) (bool, error) {
+	return false, nil
+}
+
+// deleteOpenChanAnnPref deletes an open channel's announcement preference.
+func (f *fundingManager) deleteOpenChanAnnPref(chanPoint *wire.OutPoint) error {
+	return nil
 }
 
 // saveChannelOpeningState saves the channelOpeningState for the provided

@@ -1444,8 +1444,7 @@ func (s *server) DisconnectPeer(pubKey *btcec.PublicKey) error {
 func (s *server) OpenChannel(peerID int32, nodeKey *btcec.PublicKey,
 	localAmt btcutil.Amount, pushAmt lnwire.MilliSatoshi,
 	private bool) (chan *lnrpc.OpenStatusUpdate, chan error) {
-fmt.Println(private)
-	fmt.Println("\n\n\n")
+
 	updateChan := make(chan *lnrpc.OpenStatusUpdate, 1)
 	errChan := make(chan error, 1)
 

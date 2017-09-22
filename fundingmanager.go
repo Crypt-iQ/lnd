@@ -181,19 +181,15 @@ type fundingConfig struct {
 	// announcement from the backing Lighting Network node.
 	CurrentNodeAnnouncement func() (lnwire.NodeAnnouncement, error)
 
-	// SendAnnouncement is used by the FundingManager to announce newly
-	// created channels to the rest of the Lightning Network.
-	SendAnnouncement func(msg lnwire.Message) error
+	// SendLocalAnnouncement is used by the FundingManager to send
+	// announcement messages to the Gossiper to possibly broadcast
+	// to the greater network.
+	SendLocalAnnouncement func(msg lnwire.Message) error
 
 	// SendToPeer allows the FundingManager to send messages to the peer
 	// node during the multiple steps involved in the creation of the
 	// channel's funding transaction and initial commitment transaction.
 	SendToPeer func(target *btcec.PublicKey, msgs ...lnwire.Message) error
-
-	// SendToGossiper is used by the FundingManager to send private
-	// ChannelAnnouncement and ChannelUpdate messages to our peer via the
-	// gossiper without it being broadcasted.
-	SendToGossiper func(msg lnwire.Message) error
 
 	// FindPeer searches the list of peers connected to the node so that
 	// the FundingManager can notify other daemon subsystems as necessary
@@ -1585,11 +1581,11 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 
 	// Send ChannelAnnouncement and ChannelUpdate to the gossiper to add
 	// to the Router's topology.
-	if err = f.cfg.SendToGossiper(ann.chanAnn); err != nil {
+	if err = f.cfg.SendLocalAnnouncement(ann.chanAnn); err != nil {
 		return fmt.Errorf("error sending private channel "+
 			"announcement: %v", err)
 	}
-	if err = f.cfg.SendToGossiper(ann.chanUpdateAnn); err != nil {
+	if err = f.cfg.SendLocalAnnouncement(ann.chanUpdateAnn); err != nil {
 		return fmt.Errorf("error sending private channel "+
 			"update: %v", err)
 	}
@@ -1909,7 +1905,7 @@ func (f *fundingManager) announceChannel(localIDKey, remoteIDKey, localFundingKe
 	// because addToRouterGraph previously send the ChannelAnnouncement and
 	// the ChannelUpdate announcement messages. The channel proof and node
 	// announcements are broadcast to the greater network.
-	if err = f.cfg.SendAnnouncement(ann.chanProof); err != nil {
+	if err = f.cfg.SendLocalAnnouncement(ann.chanProof); err != nil {
 		return err
 	}
 
@@ -1923,7 +1919,7 @@ func (f *fundingManager) announceChannel(localIDKey, remoteIDKey, localFundingKe
 		return err
 	}
 
-	if err = f.cfg.SendAnnouncement(&nodeAnn); err != nil {
+	if err = f.cfg.SendLocalAnnouncement(&nodeAnn); err != nil {
 		return err
 	}
 	return nil

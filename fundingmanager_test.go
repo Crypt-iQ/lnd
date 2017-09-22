@@ -178,15 +178,7 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 		SignMessage: func(pubKey *btcec.PublicKey, msg []byte) (*btcec.Signature, error) {
 			return nil, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) error {
-			select {
-			case sentAnnouncements <- msg:
-			case <-shutdownChan:
-				return fmt.Errorf("shutting down")
-			}
-			return nil
-		},
-		SendToGossiper: func(msg lnwire.Message) error {
+		SendLocalAnnouncement: func(msg lnwire.Message) error {
 			select {
 			case sentAnnouncements <- msg:
 			case <-shutdownChan:
@@ -252,11 +244,7 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 			msg []byte) (*btcec.Signature, error) {
 			return nil, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) error {
-			aliceAnnounceChan <- msg
-			return nil
-		},
-		SendToGossiper: func(msg lnwire.Message) error {
+		SendLocalAnnouncement: func(msg lnwire.Message) error {
 			aliceAnnounceChan <- msg
 			return nil
 		},
@@ -915,8 +903,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	}
 
 	// Intentionally make the public channel announcements fail
-	alice.fundingMgr.cfg.SendAnnouncement = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendAnnouncement")
+	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendLocalAnnouncement")
 	}
 
 	fundingLockedAlice := <-alice.msgChan
@@ -1032,8 +1020,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Intentionally make the next channel announcement fail
-	alice.fundingMgr.cfg.SendAnnouncement = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendAnnouncement")
+	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendLocalAnnouncement")
 	}
 
 	// The private announcements

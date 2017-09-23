@@ -608,8 +608,9 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	//      2) ChannelUpdate
 	//      3) ChannelUpdate
 	// The only message of the three that will reach the peer is the second
-	// ChannelUpdate message. The second channel announcement is sent via
-	// SendToPeer.
+	// ChannelUpdate message. The second channel update is sent via
+	// SendToPeer. In the test case, the second channel update will not be
+	// sent because we don't use the gossiper.
 	privateAnns := make([]lnwire.Message, 2)
 	for i := 0; i < len(privateAnns); i++ {
 		select {
@@ -692,12 +693,7 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
 
 	// After the FundingLocked message is sent, the channel will be announced.
-	// A chanAnnouncement consists of three distinct messages:
-	//	1) ChannelAnnouncement
-	//	2) ChannelUpdate
-	//	3) AnnounceSignatures
-	// that will be announced in no particular order.
-	// A node announcement will also be sent.
+	// An AnnounceSignatures and a NodeAnnouncement message will be sent.
 	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
@@ -1154,3 +1150,5 @@ func TestFundingManagerFundingTimeout(t *testing.T) {
 			len(pendingChannels))
 	}
 }
+
+// TODO(eugene) Private channel test

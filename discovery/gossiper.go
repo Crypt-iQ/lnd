@@ -475,6 +475,7 @@ func (d *AuthenticatedGossiper) networkHandler() {
 				if ei.AuthProof != nil {
 					selfChans = append(selfChans, c)
 				}
+
 				return nil
 			})
 			if err != nil {
@@ -1155,6 +1156,10 @@ func (d *AuthenticatedGossiper) synchronizeWithNode(syncReq *syncRequest) error 
 	// containing all the messages to be sent to the target peer.
 	var announceMessages []lnwire.Message
 
+	// We'll collate all the nodes whose channel's ChannelEdgeInfo has
+	// no AuthProof. These nodes will not be announced to the peer.
+	privateNodes := make(map[string]struct{})
+
 	// As peers are expecting channel announcements before node
 	// announcements, we first retrieve the initial announcement, as well as
 	// the latest channel update announcement for both of the directed edges
@@ -1178,6 +1183,21 @@ func (d *AuthenticatedGossiper) synchronizeWithNode(syncReq *syncRequest) error 
 			}
 
 			numEdges++
+		} else {
+			isFirstNode := bytes.Equal(d.selfKey.SerializeCompressed(),
+				chanInfo.NodeKey1.SerializeCompressed())
+
+			// Get peer's public key
+			var remoteNode *btcec.PublicKey
+			if isFirstNode {
+				remoteNode = chanInfo.NodeKey2
+			} else {
+				remoteNode = chanInfo.NodeKey1
+			}
+
+			// Store string version (for equality!) in privateNodes map
+			privateNodes[string(remoteNode.SerializeCompressed())] = struct{}{}
+
 		}
 
 		return nil
@@ -1200,6 +1220,13 @@ func (d *AuthenticatedGossiper) synchronizeWithNode(syncReq *syncRequest) error 
 		if err != nil {
 			return err
 		}
+
+		// If this node exists in privateNodes, skip it
+		serializedKey := node.PubKey.SerializeCompressed()
+		if _, ok := privateNodes[string(serializedKey)]; ok {
+			return nil
+		}
+
 		ann := &lnwire.NodeAnnouncement{
 			Signature: node.AuthSig,
 			Timestamp: uint32(node.LastUpdate.Unix()),
@@ -1208,7 +1235,6 @@ func (d *AuthenticatedGossiper) synchronizeWithNode(syncReq *syncRequest) error 
 			Alias:     alias,
 			Features:  node.Features,
 		}
-
 		announceMessages = append(announceMessages, ann)
 
 		numNodes++

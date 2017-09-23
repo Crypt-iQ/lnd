@@ -196,7 +196,7 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 		SignMessage: func(pubKey *btcec.PublicKey, msg []byte) (*btcec.Signature, error) {
 			return nil, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) error {
+		SendLocalAnnouncement: func(msg lnwire.Message) error {
 			select {
 			case sentAnnouncements <- msg:
 			case <-shutdownChan:
@@ -384,7 +384,7 @@ func tearDownFundingManagers(t *testing.T, a, b *testNode) {
 // transaction is confirmed on-chain. Returns the funding out point.
 func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 	pushAmt btcutil.Amount, numConfs uint32,
-	updateChan chan *lnrpc.OpenStatusUpdate) *wire.OutPoint {
+	updateChan chan *lnrpc.OpenStatusUpdate, private bool) *wire.OutPoint {
 	// Create a funding request and start the workflow.
 	errChan := make(chan error, 1)
 	initReq := &openChanReq{
@@ -393,6 +393,7 @@ func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 		chainHash:       *activeNetParams.GenesisHash,
 		localFundingAmt: localFundingAmt,
 		pushAmt:         lnwire.NewMSatFromSatoshis(pushAmt),
+		private:         private,
 		updates:         updateChan,
 		err:             errChan,
 	}
@@ -584,13 +585,8 @@ func assertFundingLockedSent(t *testing.T, alice, bob *testNode,
 
 func assertChannelAnnouncements(t *testing.T, alice, bob *testNode) {
 	// After the FundingLocked message is sent, the channel will be announced.
-	// A chanAnnouncement consists of three distinct messages:
-	//	1) ChannelAnnouncement
-	//	2) ChannelUpdate
-	//	3) AnnounceSignatures
-	// that will be announced in no particular order.
-	// A node announcement will also be sent.
-	announcements := make([]lnwire.Message, 4)
+	// An AnnounceSignatures and a NodeAnnouncement message will be sent.
+	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
@@ -599,17 +595,11 @@ func assertChannelAnnouncements(t *testing.T, alice, bob *testNode) {
 		}
 	}
 
-	gotChannelAnnouncement := false
-	gotChannelUpdate := false
 	gotAnnounceSignatures := false
 	gotNodeAnnouncement := false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -617,12 +607,6 @@ func assertChannelAnnouncements(t *testing.T, alice, bob *testNode) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Alice")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Alice")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Alice")
 	}
@@ -639,17 +623,11 @@ func assertChannelAnnouncements(t *testing.T, alice, bob *testNode) {
 		}
 	}
 
-	gotChannelAnnouncement = false
-	gotChannelUpdate = false
 	gotAnnounceSignatures = false
 	gotNodeAnnouncement = false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -657,12 +635,6 @@ func assertChannelAnnouncements(t *testing.T, alice, bob *testNode) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Bob")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Bob")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Bob")
 	}
@@ -798,7 +770,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// Run through the process of opening the channel, up until the funding
 	// transaction is broadcasted.
 	updateChan := make(chan *lnrpc.OpenStatusUpdate)
-	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan)
+	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan,
+		false)
 
 	// After the funding transaction gets mined, both nodes will send the
 	// fundingLocked message to the other peer. If the funding node fails
@@ -870,9 +843,9 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
 
-	// Intetionally make the next channel announcement fail
-	alice.fundingMgr.cfg.SendAnnouncement = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendAnnouncement")
+	// Intentionally make the channel announcements fail
+	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendLocalAnnouncement")
 	}
 
 	fundingLockedAlice := checkNodeSendingFundingLocked(t, alice)
@@ -1085,7 +1058,7 @@ func TestFundingManagerFundingTimeout(t *testing.T) {
 
 	// Run through the process of opening the channel, up until the funding
 	// transaction is broadcasted.
-	_ = openChannel(t, alice, bob, 500000, 0, 1, updateChan)
+	_ = openChannel(t, alice, bob, 500000, 0, 1, updateChan, false)
 
 	// Bob will at this point be waiting for the funding transaction to be
 	// confirmed, so the channel should be considered pending.

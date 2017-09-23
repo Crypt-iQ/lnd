@@ -471,7 +471,11 @@ func (d *AuthenticatedGossiper) networkHandler() {
 					BaseFee:         uint32(p.FeeBaseMSat),
 					FeeRate:         uint32(p.FeeProportionalMillionths),
 				}
-				selfChans = append(selfChans, c)
+
+				if ei.AuthProof != nil {
+					selfChans = append(selfChans, c)
+				}
+
 				return nil
 			})
 			if err != nil {
@@ -876,6 +880,26 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 
 			nMsg.err <- err
 			return nil
+		}
+
+		// If this is a local ChannelUpdate announcement, send it to
+		// our peer.
+		if !nMsg.isRemote {
+			// Get our peer's public key
+			var remotePeer *btcec.PublicKey
+			switch msg.Flags {
+			case 0:
+				remotePeer = chanInfo.NodeKey2
+			case 1:
+				remotePeer = chanInfo.NodeKey1
+			}
+
+			// Send ChannelUpdate to remotePeer
+			if err = d.cfg.SendToPeer(remotePeer, msg); err != nil {
+				log.Errorf("unable to send channel update "+
+					"message to peer: %x",
+					remotePeer.SerializeCompressed())
+			}
 		}
 
 		// Channel update announcement was successfully processed and

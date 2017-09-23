@@ -178,7 +178,7 @@ func createTestFundingManager(t *testing.T, pubKey *btcec.PublicKey,
 		SignMessage: func(pubKey *btcec.PublicKey, msg []byte) (*btcec.Signature, error) {
 			return nil, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) error {
+		SendLocalAnnouncement: func(msg lnwire.Message) error {
 			select {
 			case sentAnnouncements <- msg:
 			case <-shutdownChan:
@@ -244,7 +244,7 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 			msg []byte) (*btcec.Signature, error) {
 			return nil, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) error {
+		SendLocalAnnouncement: func(msg lnwire.Message) error {
 			aliceAnnounceChan <- msg
 			return nil
 		},
@@ -376,7 +376,7 @@ func tearDownFundingManagers(t *testing.T, a, b *testNode, shutdownChannel chan 
 // transaction is confirmed on-chain. Returns the funding out point.
 func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 	pushAmt btcutil.Amount, numConfs uint32,
-	updateChan chan *lnrpc.OpenStatusUpdate) *wire.OutPoint {
+	updateChan chan *lnrpc.OpenStatusUpdate, private bool) *wire.OutPoint {
 	// Create a funding request and start the workflow.
 	errChan := make(chan error, 1)
 	initReq := &openChanReq{
@@ -385,6 +385,7 @@ func openChannel(t *testing.T, alice, bob *testNode, localFundingAmt,
 		chainHash:       *activeNetParams.GenesisHash,
 		localFundingAmt: localFundingAmt,
 		pushAmt:         lnwire.NewMSatFromSatoshis(pushAmt),
+		private:         private,
 		updates:         updateChan,
 		err:             errChan,
 	}
@@ -525,7 +526,8 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 
 	// Run through the process of opening the channel, up until the funding
 	// transaction is broadcasted.
-	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan)
+	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan,
+		false)
 
 	// Notify that transaction was mined
 	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
@@ -602,14 +604,99 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
 	}
 
+	// After the FundingLocked message is sent, Alice & Bob will each send
+	// three private announcement messages:
+	//      1) ChannelAnnouncement
+	//      2) ChannelUpdate
+	//      3) ChannelUpdate
+	// The only message of the three that will reach the peer is the second
+	// ChannelUpdate message. The second channel update is sent via
+	// SendToPeer. In the test case, the second channel update will not be
+	// sent because we don't use the gossiper.
+	privateAnns := make([]lnwire.Message, 2)
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-alice.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("alice did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement := false
+	gotPrivateChannelUpdate := false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Alice")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Alice")
+	}
+
+	// Do the check for Bob as well
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-bob.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("bob did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement = false
+	gotPrivateChannelUpdate = false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Bob")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Bob")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the state machine is updated accordingly
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
+	}
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
+	}
+
+	// Notify Alice & Bob that funding tx reached 6 confirmations, they
+	// can now send announcement_signatures and the node announcement
+	// messages.
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
 	// After the FundingLocked message is sent, the channel will be announced.
-	// A chanAnnouncement consists of three distinct messages:
-	//	1) ChannelAnnouncement
-	//	2) ChannelUpdate
-	//	3) AnnounceSignatures
-	// that will be announced in no particular order.
-	// A node announcement will also be sent.
-	announcements := make([]lnwire.Message, 4)
+	// An AnnounceSignatures and a NodeAnnouncement message will be sent.
+	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
@@ -618,17 +705,11 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement := false
-	gotChannelUpdate := false
 	gotAnnounceSignatures := false
 	gotNodeAnnouncement := false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -636,12 +717,6 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Alice")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Alice")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Alice")
 	}
@@ -658,17 +733,11 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement = false
-	gotChannelUpdate = false
 	gotAnnounceSignatures = false
 	gotNodeAnnouncement = false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -676,12 +745,6 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Bob")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Bob")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Bob")
 	}
@@ -731,7 +794,8 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	// Run through the process of opening the channel, up until the funding
 	// transaction is broadcasted.
 	updateChan := make(chan *lnrpc.OpenStatusUpdate)
-	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan)
+	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan,
+		false)
 
 	// After the funding transaction gets mined, both nodes will send the
 	// fundingLocked message to the other peer. If the funding node fails
@@ -820,9 +884,9 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
 
-	// Intetionally make the next channel announcement fail
-	alice.fundingMgr.cfg.SendAnnouncement = func(msg lnwire.Message) error {
-		return fmt.Errorf("intentional error in SendAnnouncement")
+	// Intentionally make the channel announcements fail
+	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendLocalAnnouncement")
 	}
 
 	fundingLockedAlice := <-alice.msgChan
@@ -852,8 +916,54 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		// Expected
 	}
 
-	// Bob, however, should send the announcements
-	announcements := make([]lnwire.Message, 4)
+	// Bob, however, should send the announcements:
+	// The private announcements
+	privateAnns := make([]lnwire.Message, 2)
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-bob.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("bob did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement := false
+	gotPrivateChannelUpdate := false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Bob")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Bob")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the state machine is updated accordingly
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
+	}
+
+	// Notify Bob that funding tx reached 6 confirmations, he can now
+	// send announcement_signatures and the node announcement messages.
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
+	// And the public announcements
+	announcements := make([]lnwire.Message, 2)
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-bob.announceChan:
@@ -862,17 +972,11 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement := false
-	gotChannelUpdate := false
 	gotAnnounceSignatures := false
 	gotNodeAnnouncement := false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -880,12 +984,6 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Bob")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Bob")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Bob")
 	}
@@ -893,10 +991,61 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		t.Fatalf("did not get NodeAnnouncement from Bob")
 	}
 
-	// Next up, we check that the Alice rebroadcasts the announcement
+	// Next up, we check that Alice rebroadcasts the announcement messages
+	// on restart.
+	recreateAliceFundingManager(t, alice)
+	time.Sleep(300 * time.Millisecond)
+
+	// The private announcements
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-alice.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("alice did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement = false
+	gotPrivateChannelUpdate = false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Alice")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Alice")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the state machine is updated accordingly
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != addedToRouterGraph {
+		t.Fatalf("expected state to be addedToRouterGraph, was %v", state)
+	}
+
+	// Next up, we check that Alice rebroadcasts the public announcement
 	// messages on restart.
 	recreateAliceFundingManager(t, alice)
 	time.Sleep(300 * time.Millisecond)
+
+	// Notify Alice that funding tx reached 6 confirmations, she can now
+	// send announcement_signatures and the node announcement messages.
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
+	// And the public announcements
 	for i := 0; i < len(announcements); i++ {
 		select {
 		case announcements[i] = <-alice.announceChan:
@@ -905,17 +1054,11 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	gotChannelAnnouncement = false
-	gotChannelUpdate = false
 	gotAnnounceSignatures = false
 	gotNodeAnnouncement = false
 
 	for _, msg := range announcements {
 		switch msg.(type) {
-		case *lnwire.ChannelAnnouncement:
-			gotChannelAnnouncement = true
-		case *lnwire.ChannelUpdate:
-			gotChannelUpdate = true
 		case *lnwire.AnnounceSignatures:
 			gotAnnounceSignatures = true
 		case *lnwire.NodeAnnouncement:
@@ -923,12 +1066,6 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 		}
 	}
 
-	if !gotChannelAnnouncement {
-		t.Fatalf("did not get ChannelAnnouncement from Alice after restart")
-	}
-	if !gotChannelUpdate {
-		t.Fatalf("did not get ChannelUpdate from Alice after restart")
-	}
 	if !gotAnnounceSignatures {
 		t.Fatalf("did not get AnnounceSignatures from Alice after restart")
 	}
@@ -968,7 +1105,7 @@ func TestFundingManagerFundingTimeout(t *testing.T) {
 
 	// Run through the process of opening the channel, up until the funding
 	// transaction is broadcasted.
-	_ = openChannel(t, alice, bob, 500000, 0, 1, updateChan)
+	_ = openChannel(t, alice, bob, 500000, 0, 1, updateChan, false)
 
 	// Bob will at this point be waiting for the funding transaction to be
 	// confirmed, so the channel should be considered pending.
@@ -1014,5 +1151,483 @@ func TestFundingManagerFundingTimeout(t *testing.T) {
 	if len(pendingChannels) != 0 {
 		t.Fatalf("Expected Bob to have 0 pending channel, had  %v",
 			len(pendingChannels))
+	}
+}
+
+// TestFundingManagerPrivateChannel tests that if we open a private channel,
+// the announcement_signatures nor the node_announcement messages are sent.
+func TestFundingManagerPrivateChannel(t *testing.T) {
+	disableFndgLogger(t)
+
+	shutdownChannel := make(chan struct{})
+
+	alice, bob := setupFundingManagers(t, shutdownChannel)
+	defer tearDownFundingManagers(t, alice, bob, shutdownChannel)
+
+	// We will consume the channel updates as we go, so no buffering is needed.
+	updateChan := make(chan *lnrpc.OpenStatusUpdate)
+
+	// Run through the process of opening the channel, up until the funding
+	// transaction is broadcasted. This channel will be a private channel.
+	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan,
+		true)
+
+	// Notify that transaction was mined
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
+	// Give fundingManager time to process the newly mined tx and write
+	//state to database.
+	time.Sleep(300 * time.Millisecond)
+
+	// The funding transaction was mined, so assert that both funding
+	// managers now have the state of this channel 'markedOpen' in their
+	// internal state machine.
+	state, _, err := alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != markedOpen {
+		t.Fatalf("expected state to be markedOpen, was %v", state)
+	}
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != markedOpen {
+		t.Fatalf("expected state to be markedOpen, was %v", state)
+	}
+
+	// After the funding transaction is mined, Alice will send
+	// fundingLocked to Bob.
+	var fundingLockedAlice lnwire.Message
+	select {
+	case fundingLockedAlice = <-alice.msgChan:
+	case <-time.After(time.Second * 5):
+		t.Fatalf("alice did not send fundingLocked")
+	}
+	if fundingLockedAlice.MsgType() != lnwire.MsgFundingLocked {
+		t.Fatalf("expected fundingLocked sent from Alice, "+
+			"instead got %T", fundingLockedAlice)
+	}
+
+	// And similarly Bob will send funding locked to Alice.
+	var fundingLockedBob lnwire.Message
+	select {
+	case fundingLockedBob = <-bob.msgChan:
+	case <-time.After(time.Second * 5):
+		t.Fatalf("bob did not send fundingLocked")
+	}
+
+	if fundingLockedBob.MsgType() != lnwire.MsgFundingLocked {
+		t.Fatalf("expected fundingLocked sent from Bob, "+
+			"instead got %T", fundingLockedBob)
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the state machine is updated accordingly
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != fundingLockedSent {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != fundingLockedSent {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+
+	// After the FundingLocked message is sent, Alice & Bob will each send
+	// three private announcement messages:
+	//      1) ChannelAnnouncement
+	//      2) ChannelUpdate
+	//      3) ChannelUpdate
+	// The only message of the three that will reach the peer is the second
+	// ChannelUpdate message. The second channel update is sent via
+	// SendToPeer. In the test case, the second channel update will not be
+	// sent because we don't use the gossiper.
+	privateAnns := make([]lnwire.Message, 2)
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-alice.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("alice did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement := false
+	gotPrivateChannelUpdate := false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Alice")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Alice")
+	}
+
+	// Do the check for Bob as well
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-bob.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("bob did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement = false
+	gotPrivateChannelUpdate = false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Bob")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Bob")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// The internal state-machine should now have deleted the channelStates
+	// from the database, as the channel is announced.
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != ErrChannelNotFound {
+		t.Fatalf("expected to not find channel state, but got: %v", state)
+	}
+
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != ErrChannelNotFound {
+		t.Fatalf("expected to not find channel state, but got: %v", state)
+	}
+
+	// Notify Alice & Bob that funding tx reached 6 confirmations, their
+	// respective mockNotifiers should never receive the TxConfirmation
+	// object. They should also not send the announcement_signatures nor
+	// the node_announcement messages.
+
+	// This is run in a goroutine because it WILL block the main thread
+	// since neither alice nor bob are waiting for 6 confirmations to
+	// announce their channel since it is private.
+	go func() {
+		alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+		bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	}()
+
+	// Check that the channel announcements were never sent
+	// For Alice
+	select {
+	case ann := <-alice.announceChan:
+		t.Fatalf("unexpectedly got announcement message on "+
+			"private channel: %v", ann)
+	default:
+		// Expected
+	}
+
+	// For Bob
+	select {
+	case ann := <-bob.announceChan:
+		t.Fatalf("unexpectedly got announcement message on "+
+			"private channel: %v", ann)
+	default:
+		// Expected
+	}
+
+	// The funding process is now finished, wait for the
+	// OpenStatusUpdate_ChanOpen update
+	var openUpdate *lnrpc.OpenStatusUpdate
+	select {
+	case openUpdate = <-updateChan:
+	case <-time.After(time.Second * 5):
+		t.Fatalf("alice did not send OpenStatusUpdate")
+	}
+
+	_, ok := openUpdate.Update.(*lnrpc.OpenStatusUpdate_ChanOpen)
+	if !ok {
+		t.Fatal("OpenStatusUpdate was not OpenStatusUpdate_ChanOpen")
+	}
+}
+
+// TestFundingManagerPrivateRestart tests that the privacy guarantees granted
+// by the private channel persist even on startup. This means that the
+// announcement_signatures nor the node_announcement messages are sent upon
+// restart.
+func TestFundingManagerPrivateRestart(t *testing.T) {
+	disableFndgLogger(t)
+
+	shutdownChannel := make(chan struct{})
+
+	alice, bob := setupFundingManagers(t, shutdownChannel)
+	defer tearDownFundingManagers(t, alice, bob, shutdownChannel)
+
+	// Run through the process of opening the channel, up until the funding
+	// transaction is broadcased.
+	updateChan := make(chan *lnrpc.OpenStatusUpdate)
+	fundingOutPoint := openChannel(t, alice, bob, 500000, 0, 1, updateChan,
+		true)
+
+	// After the funding transaction gets mined, both nodes will send the
+	// fundingLocked message to the other peer. If the funding node fails
+	// before this message has been successfully sent, it should retry
+	// sending it on restart. We mimic this behavior by letting the
+	// SendToPeer method return an error, as if the message was not
+	// successfully sent. We then restart the fundingManager and make sure
+	// it continues the process as expected.
+	alice.fundingMgr.cfg.SendToPeer = func(target *btcec.PublicKey,
+		msgs ...lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendToPeer")
+	}
+
+	// Notify that transaction was mined
+	alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+
+	// Give fundingManager time to process the newly mined tx and write to
+	// the database.
+	time.Sleep(500 * time.Millisecond)
+
+	// The funding transaction was mined, so assert that both funding
+	// managers now have the state of this channel 'markedOpen' in their
+	// internal state machine.
+	state, _, err := alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != markedOpen {
+		t.Fatalf("expected state to be markedOpen, was %v", state)
+	}
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != markedOpen {
+		t.Fatalf("expected state to be markedOpen, was %v", state)
+	}
+
+	// After the funding transaction was mined, Bob should have successfully
+	// sent the fundingLocked message, while Alice failed sending it. In
+	// Alice's case this means that there should be no messages for Bob, and
+	//  the channel should still be in state 'markedOpen'
+
+	select {
+	case msg := <-alice.msgChan:
+		t.Fatalf("did not expect any message from Alice: %v", msg)
+	default:
+		// Expected.
+	}
+
+	// Bob will send funding locked to Alice
+	fundingLockedBob := <-bob.msgChan
+	if fundingLockedBob.MsgType() != lnwire.MsgFundingLocked {
+		t.Fatalf("expected fundingLocked sent from Bob, "+
+			"instead got %T", fundingLockedBob)
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(1 * time.Second)
+
+	// Alice should still be markedOpen
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != markedOpen {
+		t.Fatalf("expected state to be markedOpen, was %v", state)
+	}
+
+	// While Bob successfully sent fundingLocked.
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != fundingLockedSent {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+
+	// We now recreate Alice's fundingManager, and expect it to retry
+	// sending the fundingLocked message.
+	recreateAliceFundingManager(t, alice)
+	time.Sleep(300 * time.Millisecond)
+
+	// Intentionally make the channel announcements fail
+	alice.fundingMgr.cfg.SendLocalAnnouncement = func(msg lnwire.Message) error {
+		return fmt.Errorf("intentional error in SendLocalAnnouncement")
+	}
+
+	fundingLockedAlice := <-alice.msgChan
+	if fundingLockedAlice.MsgType() != lnwire.MsgFundingLocked {
+		t.Fatalf("expected fundingLocked sent from Alice, "+
+			"instead got %T", fundingLockedAlice)
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(500 * time.Millisecond)
+
+	// The state should now be fundingLockedSent
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != nil {
+		t.Fatalf("unable to get channel state: %v", err)
+	}
+
+	if state != fundingLockedSent {
+		t.Fatalf("expected state to be fundingLockedSent, was %v", state)
+	}
+
+	// Check that the channel announcements were never sent
+	select {
+	case _ = <-alice.announceChan:
+		t.Fatalf("unexpectedly got channel announcement message: %v", err)
+	default:
+		// Expected
+	}
+
+	// Bob, however, should send ONLY the private announcements as this is
+	// a private channel
+	privateAnns := make([]lnwire.Message, 2)
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-bob.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("bob did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement := false
+	gotPrivateChannelUpdate := false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Bob")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Bob")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// The internal state-machine should now have deleted the channelStates
+	// from the database, as the channel is announced.
+	state, _, err = bob.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != ErrChannelNotFound {
+		t.Fatalf("expected to not find channel state, but got: %v", state)
+	}
+
+	// Notify Bob that funding tx reached 6 confirmations, his
+	// mockNotifier should never receive the TxConfirmation object.
+	// He should also not send the announcement_signatures nor
+	// the node_announcement messages.
+
+	// This is run in a goroutine because it WILL block the main thread
+	// since Bob is not waiting for 6 confirmations to announce his
+	// channel with Alice since it is private.
+	go func() {
+		bob.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	}()
+
+	select {
+	case ann := <-bob.announceChan:
+		t.Fatalf("unexpectedly got announcement message on "+
+			"private channel: %v", ann)
+	default:
+		// Expected
+	}
+
+	// Next up, we check that Alice rebroadcasts the announcement messages
+	// on restart. Alice will ONLY broadcast the private announcements
+	// to Bob.
+	recreateAliceFundingManager(t, alice)
+	time.Sleep(300 * time.Millisecond)
+
+	for i := 0; i < len(privateAnns); i++ {
+		select {
+		case privateAnns[i] = <-alice.announceChan:
+		case <-time.After(time.Second * 5):
+			t.Fatalf("alice did not send private announcement: %v", i)
+		}
+	}
+
+	gotPrivateChannelAnnouncement = false
+	gotPrivateChannelUpdate = false
+	for _, msg := range privateAnns {
+		switch msg.(type) {
+		case *lnwire.ChannelAnnouncement:
+			gotPrivateChannelAnnouncement = true
+		case *lnwire.ChannelUpdate:
+			gotPrivateChannelUpdate = true
+		}
+	}
+
+	if !gotPrivateChannelAnnouncement {
+		t.Fatalf("did not get private ChannelAnnouncement from Alice")
+	}
+	if !gotPrivateChannelUpdate {
+		t.Fatalf("did not get private ChannelUpdate from Alice")
+	}
+
+	// Sleep to make sure database write is finished.
+	time.Sleep(300 * time.Millisecond)
+
+	// The internal state-machine should now have deleted the channelStates
+	// from the database, as the channel is announced.
+	state, _, err = alice.fundingMgr.getChannelOpeningState(fundingOutPoint)
+	if err != ErrChannelNotFound {
+		t.Fatalf("expected to not find channel state, but got: %v", state)
+	}
+
+	// Next up, we check that Alice doesn't broadcast the public
+	// announcement messages on restart.
+	recreateAliceFundingManager(t, alice)
+	time.Sleep(300 * time.Millisecond)
+
+	// This is run in a goroutine because it WILL block the main thread
+	// since Alice is not waiting for 6 confirmations to announce his
+	// channel with Bob since it is private.
+	go func() {
+		alice.mockNotifier.confChannel <- &chainntnfs.TxConfirmation{}
+	}()
+
+	// Check that the channel announcements were never sent
+	select {
+	case ann := <-alice.announceChan:
+		t.Fatalf("unexpectedly got announcement message on "+
+			"private channel: %v", ann)
+	default:
+		// Expected
 	}
 }

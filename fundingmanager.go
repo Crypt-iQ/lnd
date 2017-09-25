@@ -511,11 +511,12 @@ func (f *fundingManager) Start() error {
 					return
 				}
 
+				f.signalProcessFundingLocked(chanID)
+
 				if private {
-					err = f.startPrivateChannel(channel)
+					err := f.deleteChannelOpeningState(
+						&channel.FundingOutpoint)
 					if err != nil {
-						fndgLog.Errorf("error starting "+
-							"private channel: %v", err)
 						return
 					}
 				} else {
@@ -554,11 +555,12 @@ func (f *fundingManager) Start() error {
 				}
 				defer lnChannel.Stop()
 
+				f.signalProcessFundingLocked(chanID)
+
 				if private {
-					err = f.startPrivateChannel(channel)
+					err := f.deleteChannelOpeningState(
+						&channel.FundingOutpoint)
 					if err != nil {
-						fndgLog.Errorf("error starting "+
-							"private channel: %v", err)
 						return
 					}
 				} else {
@@ -1612,10 +1614,14 @@ func (f *fundingManager) handleFundingConfirmation(completeChan *channeldb.OpenC
 		return fmt.Errorf("failed adding to router graph: %v", err)
 	}
 
+	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
+	f.signalProcessFundingLocked(chanID)
+
 	if private {
-		err = f.startPrivateChannel(completeChan)
+		// We delete the channel from our internal database.
+		err := f.deleteChannelOpeningState(&completeChan.FundingOutpoint)
 		if err != nil {
-			return fmt.Errorf("failed to start private channel: %v", err)
+			return fmt.Errorf("error deleting channel state: %v", err)
 		}
 	} else {
 		err = f.annAfterSixConfs(completeChan, lnChannel, shortChanID)
@@ -1710,27 +1716,16 @@ func (f *fundingManager) addToRouterGraph(completeChan *channeldb.OpenChannel,
 	return nil
 }
 
-// startPrivateChannel deletes the channel from the internal database and
-// closes the discoverySignal chan to indicate that it is safe for
-// funding locked messages related to this channel to be processed.
-func (f *fundingManager) startPrivateChannel(completeChan *channeldb.OpenChannel) error {
-	chanID := lnwire.NewChanIDFromOutPoint(&completeChan.FundingOutpoint)
-
-	// We delete the channel from our internal database.
-	err := f.deleteChannelOpeningState(&completeChan.FundingOutpoint)
-	if err != nil {
-		return fmt.Errorf("error deleting channel state: %v", err)
-	}
-
-	// We'll trigger the signal indicating that it's safe for any funding
-	// locked messages related to this channel to be processed.
+// signalProcessFundingLocked closes the discoverySignal channel, indicating
+// to a separate goroutine that it is acceptable to process funding locked
+// messages from the peer.
+func (f *fundingManager) signalProcessFundingLocked(chanID lnwire.ChannelID)  {
+	// Trigger the signal.
 	f.localDiscoveryMtx.Lock()
 	if discoverySignal, ok := f.localDiscoverySignals[chanID]; ok {
 		close(discoverySignal)
 	}
 	f.localDiscoveryMtx.Unlock()
-
-	return nil
 }
 
 // annAfterSixConfs broadcasts the necessary channel announcement messages to
@@ -1788,15 +1783,6 @@ func (f *fundingManager) annAfterSixConfs(completeChan *channeldb.OpenChannel,
 	if err != nil {
 		return fmt.Errorf("error deleting channel state: %v", err)
 	}
-
-	// Finally, as the local channel discovery has been fully processed,
-	// we'll trigger the signal indicating that it's safe for any funding
-	// locked messages related to this channel to be processed.
-	f.localDiscoveryMtx.Lock()
-	if discoverySignal, ok := f.localDiscoverySignals[chanID]; ok {
-		close(discoverySignal)
-	}
-	f.localDiscoveryMtx.Unlock()
 
 	return nil
 }

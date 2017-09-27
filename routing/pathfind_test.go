@@ -21,6 +21,7 @@ import (
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 
+	"fmt"
 	prand "math/rand"
 )
 
@@ -57,8 +58,6 @@ var (
 
 // testGraph is the struct which corresponds to the JSON format used to encode
 // graphs within the files in the testdata directory.
-//
-// TODO(roasbeef): add test graph auto-generator
 type testGraph struct {
 	Info  []string   `json:"info"`
 	Nodes []testNode `json:"nodes"`
@@ -87,6 +86,237 @@ type testChan struct {
 	FeeBaseMsat  int64   `json:"fee_base_msat"`
 	FeeRate      float64 `json:"fee_rate"`
 	Capacity     int64   `json:"capacity"`
+}
+
+// generateTestGraph generates a complete testGraph that includes nodes, edges,
+// and no isolated nodes. It writes the contents of the graph to a json file in
+// a user-specified file.
+func generateTestGraph(fileName string, numNodes int) (*testGraph, error) {
+	if numNodes < 2 {
+		return nil, fmt.Errorf("Too few nodes to generate a graph with " +
+			"no isolated nodes.")
+	}
+	g := &testGraph{}
+
+	// Generate fluff info since this doesn't matter
+	info := make([]string, 1)
+	info[0] = "generated-info"
+	g.Info = info
+
+	// Generate the nodes of the testGraph.
+	nodes := make([]testNode, numNodes)
+	for i := 0; i < numNodes; i++ {
+		node := testNode{}
+
+		var source bool
+		if i == 0 {
+			source = true
+		} else {
+			source = false
+		}
+		node.Source = source
+
+		privKey, err := btcec.NewPrivateKey(btcec.S256())
+		if err != nil {
+			return nil, err
+		}
+		node.PubKey = hex.EncodeToString(privKey.PubKey().SerializeCompressed())
+
+		node.Alias = node.PubKey[:15]
+
+		nodes[i] = node
+	}
+
+	g.Nodes = nodes
+
+	// Finally, generate the edges such that no node is isolated while
+	// maintaining some degree of pseudo-randomness with respect to the graph
+	// topology itself. Though a patterned approach could have been taken,
+	// a random approach was used in the spirit of "generating" test graphs.
+
+	edges := make([]testChan, 0)
+
+outer:
+	for {
+		// This loop handles edge generation.
+		for i := 0; i < numNodes; i++ {
+
+		inner:
+			for j := 0; j < numNodes; j++ {
+				if i == j {
+					continue
+				}
+
+				// Generate an edge depending on randInts.Int()
+				if randInts.Int()%2 != 0 {
+					continue
+				}
+
+				// Check if an edge already exists
+				// between node i & node j.
+				for k := 0; k < len(edges); k++ {
+					e := edges[k]
+					if g.Nodes[i].PubKey == e.Node1 {
+						if g.Nodes[j].PubKey == e.Node2 {
+							break inner
+						}
+					} else if g.Nodes[i].PubKey == e.Node2 {
+						if g.Nodes[j].PubKey == e.Node1 {
+							break inner
+						}
+					}
+				}
+
+				// Since no edge exists between node
+				// i & node j, we can construct an edge
+				// between them.
+				edge := testChan{}
+				edge.Node1 = g.Nodes[i].PubKey
+				edge.Node2 = g.Nodes[j].PubKey
+
+				// Generate ChannelID
+				edge.ChannelID = randInts.Uint64()
+
+				// Generate ChannelPoint
+				hash := make([]byte, 32)
+				for m := 0; m < len(hash); m++ {
+					b := byte(uint32(randInts.Int31()) % 256)
+					hash[m] = b
+				}
+				txHash, err := chainhash.NewHash(hash)
+				if err != nil {
+					return nil, err
+				}
+				edge.ChannelPoint = txHash.String() + ":0"
+
+				// Arbitrary values for the rest of the fields
+				edge.Flags = 0
+				edge.Expiry = 1
+				edge.MinHTLC = 1
+				edge.FeeBaseMsat = 10
+				edge.FeeRate = 0.001
+				edge.Capacity = randInts.Int63() % 1000000
+
+				edges = append(edges[:], edge)
+			}
+		}
+
+		// Check that every node is reachable by every other node. If
+		// this is not the case, we have an isolated node(s) and we break.
+	route:
+		for i := 0; i < numNodes; i++ {
+			for j := i; j < numNodes; j++ {
+				if i == j {
+					continue
+				}
+
+				// We recursively check that node i and node j
+				// have a route in common. We start the path
+				// finding process at n1 (node i).
+				n1 := g.Nodes[i].PubKey
+				n2 := g.Nodes[j].PubKey
+				path := make([]string, 1)
+				path[0] = n1
+
+				if !recursiveEdgeSearch(n1, n2, path, edges, g) {
+					// node i cannot reach node j, break
+					// and try again when more edges are
+					// created.
+					break route
+				}
+			}
+
+			if i == numNodes-1 {
+				// Each node can reach every other node via
+				// some arbitrary route, so our work is done.
+				break outer
+			}
+		}
+	}
+
+	g.Edges = edges
+
+	// Open the file where the generated graph will reside.
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+
+	// Marshal the generated testGraph into bytes and store it in a
+	// json-indented format
+	gBytes, err := json.MarshalIndent(g, "", "	")
+	if err != nil {
+		return nil, err
+	}
+
+	// Write the bytes
+	_, err = file.Write(gBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return g, nil
+}
+
+// recursiveEdgeSearch recursively searches whether a node can reach another
+// node given both of their hex-encoded public keys, the path so far containing
+// the nodes visited, the list of all existing edges, and the graph to which
+// both nodes belong.
+func recursiveEdgeSearch(n1, n2 string, path []string, edges []testChan,
+	g *testGraph) bool {
+
+	// Copy path into a new slice
+	pathCopy := make([]string, len(path))
+	copy(pathCopy, path)
+
+	var nextNode string
+
+outer:
+	for i := 0; i < len(g.Nodes); i++ {
+		n := g.Nodes[i].PubKey
+
+		// Check if we have already visited this node.
+		for j := 0; j < len(path); j++ {
+			if n == path[j] {
+				continue outer
+			}
+		}
+
+		// Determine if an edge exists between node n and node n1.
+		// If so, we can continue on this new path.
+		for k := 0; k < len(edges); k++ {
+			e := edges[k]
+			if n1 == e.Node1 {
+				if n == e.Node2 {
+					nextNode = n
+					break
+				}
+			} else if n1 == e.Node2 {
+				if n == e.Node1 {
+					nextNode = n
+					break
+				}
+			}
+		}
+
+		// There is an edge case we must handle where the loop completes
+		// and node n1 is an isolated node, so nextNode is never set
+		// because no edges from n1 to any other node exists.
+		if nextNode == "" {
+			continue
+		}
+
+		if n2 == nextNode {
+			return true
+		}
+
+		pathCopy = append(pathCopy[:], nextNode)
+		if recursiveEdgeSearch(nextNode, n2, pathCopy, edges, g) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // makeTestGraph creates a new instance of a channeldb.ChannelGraph for testing

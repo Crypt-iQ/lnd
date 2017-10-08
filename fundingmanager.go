@@ -443,11 +443,6 @@ func (f *fundingManager) Start() error {
 		f.newChanBarriers[chanID] = make(chan struct{})
 		f.barrierMtx.Unlock()
 
-		// Set up a localDiscoverySignals to make sure we finish sending
-		// our own fundingLocked and channel announcements before
-		// processing a received fundingLocked.
-		f.localDiscoverySignals[chanID] = make(chan struct{})
-
 		// If we did find the channel in the opening state database, we
 		// have seen the funding transaction being confirmed, but we
 		// did not finish the rest of the setup procedure before we shut
@@ -1425,6 +1420,15 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 		return
 	}
 
+	// Finally, as the local channel discovery has been fully processed,
+	// we'll trigger the signal indicating that it's safe for any funding
+	// locked messages related to this channel to be processed.
+	f.localDiscoveryMtx.Lock()
+	if discoverySignal, ok := f.localDiscoverySignals[chanID]; ok {
+		close(discoverySignal)
+	}
+	f.localDiscoveryMtx.Unlock()
+
 	// Now that the funding transaction has the required number of
 	// confirmations, we send the fundingLocked message to the peer.
 	f.sendFundingLockedAndAnnounceChannel(completeChan, &shortChanID)
@@ -1543,15 +1547,6 @@ func (f *fundingManager) sendChannelAnnouncement(completeChan *channeldb.OpenCha
 		fndgLog.Errorf("error deleting channel state: %v", err)
 		return
 	}
-
-	// Finally, as the local channel discovery has been fully processed,
-	// we'll trigger the signal indicating that it's safe for any funding
-	// locked messages related to this channel to be processed.
-	f.localDiscoveryMtx.Lock()
-	if discoverySignal, ok := f.localDiscoverySignals[chanID]; ok {
-		close(discoverySignal)
-	}
-	f.localDiscoveryMtx.Unlock()
 
 	return
 }

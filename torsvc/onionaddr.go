@@ -1,10 +1,11 @@
 package torsvc
 
 import (
-	"net"
 	"fmt"
+	"net"
 )
 
+// OnionAddress contains a HiddenService
 type OnionAddress struct {
 	HiddenService []byte
 }
@@ -13,11 +14,13 @@ type OnionAddress struct {
 // interface.
 var _ net.Addr = (*OnionAddress)(nil)
 
+// String returns the HiddenService as a string
 func (o *OnionAddress) String() string {
 	return fmt.Sprintf("%s", o.HiddenService)
 }
 
+// Network returns the associated network - in this case "tcp" since Tor only
+// allows connections over TCP.
 func (o *OnionAddress) Network() string {
-	// Tor only allows "tcp"
 	return "tcp"
 }

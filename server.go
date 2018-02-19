@@ -34,6 +34,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/lightningnetwork/lnd/torsvc"
 )
 
 var (
@@ -233,19 +234,31 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	selfAddrs := make([]net.Addr, 0, len(cfg.ExternalIPs))
 	for _, ip := range cfg.ExternalIPs {
 		var addr string
-		_, _, err = net.SplitHostPort(ip)
-		if err != nil {
-			addr = net.JoinHostPort(ip, strconv.Itoa(defaultPeerPort))
+
+		// We first check if ip is a hidden service, meaning it ends
+		// with ".onion". v2 hidden services have a length of 22
+		// (including the ".onion" suffix) and v3 hidden services have
+		// a length of 62 with the suffix.
+		ipLen := len(ip)
+		if (ipLen == 22 || ipLen == 62) && ip[ipLen-6:] == ".onion" {
+			// ip is a hidden service
+			onionAddr := &torsvc.OnionAddress{HiddenService: []byte(ip)}
+			selfAddrs = append(selfAddrs, onionAddr)
 		} else {
-			addr = ip
-		}
+			// ip is not a hidden service.
+			_, _, err = net.SplitHostPort(ip)
+			if err != nil {
+				addr = net.JoinHostPort(ip, strconv.Itoa(defaultPeerPort))
+			} else {
+				addr = ip
+			}
 
-		lnAddr, err := cfg.net.ResolveTCPAddr("tcp", addr)
-		if err != nil {
-			return nil, err
+			lnAddr, err := cfg.net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+			selfAddrs = append(selfAddrs, lnAddr)
 		}
-
-		selfAddrs = append(selfAddrs, lnAddr)
 	}
 
 	chanGraph := chanDB.ChannelGraph()

@@ -15,6 +15,7 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/lightningnetwork/lnd/torsvc"
 )
 
 // MaxSliceLength is the maximum allowed length for any opaque byte slices in
@@ -61,10 +62,10 @@ func (a addressType) AddrLen() uint16 {
 		return 18
 
 	case v2OnionAddr:
-		return 12
+		return 22
 
 	case v3OnionAddr:
-		return 37
+		return 62
 
 	default:
 		return 0
@@ -295,7 +296,6 @@ func writeElement(w io.Writer, element interface{}) error {
 			return fmt.Errorf("cannot write nil TCPAddr")
 		}
 
-		// TODO(roasbeef): account for onion types too
 		if e.IP.To4() != nil {
 			var descriptor [1]byte
 			descriptor[0] = uint8(tcp4Addr)
@@ -323,6 +323,30 @@ func writeElement(w io.Writer, element interface{}) error {
 		var port [2]byte
 		binary.BigEndian.PutUint16(port[:], uint16(e.Port))
 		if _, err := w.Write(port[:]); err != nil {
+			return err
+		}
+
+	case *torsvc.OnionAddress:
+		// Here we write the v2 or v3 onion addresses into the io.Writer
+		// First we must determine if we have a v2 or v3 address, then
+		// we write the associated v2OnionAddr or v3OnionAddr descriptor.
+		if len(e.HiddenService) == 22 {
+			var descriptor [1]byte
+			descriptor[0] = uint8(v2OnionAddr)
+			if _, err := w.Write(descriptor[:]); err != nil {
+				return err
+			}
+		} else  {
+			var descriptor [1]byte
+			descriptor[0] = uint8(v3OnionAddr)
+			if _, err := w.Write(descriptor[:]); err != nil {
+				return err
+			}
+		}
+
+		// Now that we've written the descriptor to io.Writer, write
+		// the actual HiddenService bytes.
+		if _, err := w.Write(e.HiddenService); err != nil {
 			return err
 		}
 
@@ -629,7 +653,6 @@ func readElement(r io.Reader, element interface{}) error {
 
 			addrBytesRead++
 
-			address := &net.TCPAddr{}
 			aType := addressType(descriptor[0])
 			switch aType {
 
@@ -639,6 +662,7 @@ func readElement(r io.Reader, element interface{}) error {
 
 			case tcp4Addr:
 				var ip [4]byte
+				address := &net.TCPAddr{}
 				if _, err = io.ReadFull(addrBuf, ip[:]); err != nil {
 					return err
 				}
@@ -652,9 +676,12 @@ func readElement(r io.Reader, element interface{}) error {
 				address.Port = int(binary.BigEndian.Uint16(port[:]))
 
 				addrBytesRead += aType.AddrLen()
+
+				addresses = append(addresses, address)
 
 			case tcp6Addr:
 				var ip [16]byte
+				address := &net.TCPAddr{}
 				if _, err = io.ReadFull(addrBuf, ip[:]); err != nil {
 					return err
 				}
@@ -668,19 +695,35 @@ func readElement(r io.Reader, element interface{}) error {
 
 				addrBytesRead += aType.AddrLen()
 
+				addresses = append(addresses, address)
+
 			case v2OnionAddr:
+				var v2Service [22]byte
+				onionAddress := &torsvc.OnionAddress{}
+				if _, err = io.ReadFull(addrBuf, v2Service[:]); err != nil {
+					return err
+				}
+				onionAddress.HiddenService = v2Service[:]
+
 				addrBytesRead += aType.AddrLen()
-				continue
+
+				addresses = append(addresses, onionAddress)
 
 			case v3OnionAddr:
+				var v3Service [62]byte
+				onionAddress := &torsvc.OnionAddress{}
+				if _, err = io.ReadFull(addrBuf, v3Service[:]); err != nil {
+					return err
+				}
+				onionAddress.HiddenService = v3Service[:]
+
 				addrBytesRead += aType.AddrLen()
-				continue
+
+				addresses = append(addresses, onionAddress)
 
 			default:
 				return fmt.Errorf("unknown address type: %v", aType)
 			}
-
-			addresses = append(addresses, address)
 		}
 
 		*e = addresses

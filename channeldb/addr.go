@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/btcsuite/go-socks/socks"
+	"github.com/lightningnetwork/lnd/torsvc"
 )
 
 // addressType specifies the network protocol and version that should be used
@@ -59,6 +60,34 @@ func encodeTCPAddr(w io.Writer, addr *net.TCPAddr) error {
 	return nil
 }
 
+func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
+	var scratch [62]byte
+
+	if len(addr.HiddenService) == 22 {
+		scratch[0] = uint8(v2OnionAddr)
+		if _, err := w.Write(scratch[:1]); err != nil {
+			return err
+		}
+
+		copy(scratch[:22], addr.HiddenService)
+		if _, err := w.Write(scratch[:22]); err != nil {
+			return err
+		}
+	} else {
+		scratch[0] = uint8(v3OnionAddr)
+		if _, err := w.Write(scratch[:1]); err != nil {
+			return err
+		}
+
+		copy(scratch[:], addr.HiddenService)
+		if _, err := w.Write(scratch[:]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // deserializeAddr reads the serialized raw representation of an address and
 // deserializes it into the actual address, to avoid performing address
 // resolution in the database module
@@ -70,7 +99,6 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		return nil, err
 	}
 
-	// TODO(roasbeef): also add onion addrs
 	switch addressType(scratch[0]) {
 	case tcp4Addr:
 		addr := &net.TCPAddr{}
@@ -96,6 +124,22 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		}
 		addr.Port = int(byteOrder.Uint16(scratch[:2]))
 		address = addr
+	case v2OnionAddr:
+		onionAddr := &torsvc.OnionAddress{}
+		var v2Service [22]byte
+		if _, err := r.Read(v2Service[:]); err != nil {
+			return nil, err
+		}
+		onionAddr.HiddenService = v2Service[:]
+		address = onionAddr
+	case v3OnionAddr:
+		onionAddr := &torsvc.OnionAddress{}
+		var v3Service [62]byte
+		if _, err := r.Read(v3Service[:]); err != nil {
+			return nil, err
+		}
+		onionAddr.HiddenService = v3Service[:]
+		address = onionAddr
 	default:
 		return nil, ErrUnknownAddressType
 	}
@@ -110,6 +154,9 @@ func serializeAddr(w io.Writer, address net.Addr) error {
 	switch addr := address.(type) {
 	case *net.TCPAddr:
 		return encodeTCPAddr(w, addr)
+
+	case *torsvc.OnionAddress:
+		return encodeOnionAddr(w, addr)
 
 	// If this is a proxied address (due to the connection being
 	// established over a SOCKs proxy, then we'll convert it into its

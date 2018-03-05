@@ -29,7 +29,7 @@ const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
 
 // encoding represents a base32 encoding compliant with Tor's base32 encoding
 // scheme for v2 and v3 hidden services.
-var encoding = base32.NewEncoding(alphabet)
+var base32Encoding = base32.NewEncoding(alphabet)
 
 // PkScript is simple type definition which represents a raw serialized public
 // key script.
@@ -56,6 +56,14 @@ const (
 	// v3OnionAddr denotes a version 3 Tor (prop224) onion service
 	// addresses
 	v3OnionAddr addressType = 4
+
+	// v2OnionLength is the length of a fully encoded v2 hidden service string
+	// including the .onion suffix.
+	v2OnionLength = 22
+
+	// v3OnionLength is the length of a fully encoded v3 hidden service string
+	// including the .onion suffix
+	v3OnionLength = 62
 )
 
 // AddrLen returns the number of bytes that it takes to encode the target
@@ -306,9 +314,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 
 		if e.IP.To4() != nil {
-			var descriptor [1]byte
-			descriptor[0] = uint8(tcp4Addr)
-			if _, err := w.Write(descriptor[:]); err != nil {
+			if _, err := w.Write([]byte{tcp4Addr}); err != nil {
 				return err
 			}
 
@@ -318,9 +324,7 @@ func writeElement(w io.Writer, element interface{}) error {
 				return err
 			}
 		} else {
-			var descriptor [1]byte
-			descriptor[0] = uint8(tcp6Addr)
-			if _, err := w.Write(descriptor[:]); err != nil {
+			if _, err := w.Write([]byte{tcp6Addr}); err != nil {
 				return err
 			}
 			var ip [16]byte
@@ -336,17 +340,15 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 
 	case *torsvc.OnionAddress:
-		if len(e.HiddenService) == 22 {
+		if len(e.HiddenService) == v2OnionLength {
 			// v2 hidden service
-			var descriptor [1]byte
-			descriptor[0] = uint8(v2OnionAddr)
-			if _, err := w.Write(descriptor[:]); err != nil {
+			if _, err := w.Write([]byte{v2OnionAddr}); err != nil {
 				return err
 			}
 
-			// unbase32 the v2 hidden service string, truncating
+			// base32 decode the v2 hidden service string, truncating
 			// the .onion suffix
-			data, err := encoding.DecodeString(e.String()[:16])
+			data, err := base32Encoding.DecodeString(e.String()[:v2OnionLength-6])
 			if err != nil {
 				return err
 			}
@@ -354,7 +356,6 @@ func writeElement(w io.Writer, element interface{}) error {
 				return err
 			}
 
-			// write the port
 			var port [2]byte
 			binary.BigEndian.PutUint16(port[:], uint16(e.Port))
 			if _, err := w.Write(port[:]); err != nil {
@@ -363,15 +364,13 @@ func writeElement(w io.Writer, element interface{}) error {
 
 		} else {
 			// v3 hidden service
-			var descriptor [1]byte
-			descriptor[0] = uint8(v3OnionAddr)
-			if _, err := w.Write(descriptor[:]); err != nil {
+			if _, err := w.Write([]byte{v3OnionAddr}); err != nil {
 				return err
 			}
 
-			// unbase32 the v3 hidden service string, truncating
+			// base32 decode the v3 hidden service string, truncating
 			// the .onion suffix
-			data, err := encoding.DecodeString(e.String()[:56])
+			data, err := base32Encoding.DecodeString(e.String()[:v3OnionLength-6])
 			if err != nil {
 				return err
 			}
@@ -379,7 +378,6 @@ func writeElement(w io.Writer, element interface{}) error {
 				return err
 			}
 
-			// write the port
 			var port [2]byte
 			binary.BigEndian.PutUint16(port[:], uint16(e.Port))
 			if _, err := w.Write(port[:]); err != nil {
@@ -690,6 +688,8 @@ func readElement(r io.Reader, element interface{}) error {
 
 			addrBytesRead++
 
+			var addr net.Addr
+
 			aType := addressType(descriptor[0])
 			switch aType {
 
@@ -698,83 +698,77 @@ func readElement(r io.Reader, element interface{}) error {
 				continue
 
 			case tcp4Addr:
-				address := &net.TCPAddr{}
+				addr := &net.TCPAddr{}
 				var ip [4]byte
 				if _, err = io.ReadFull(addrBuf, ip[:]); err != nil {
 					return err
 				}
-				address.IP = (net.IP)(ip[:])
+				addr.IP = (net.IP)(ip[:])
 
 				var port [2]byte
 				if _, err = io.ReadFull(addrBuf, port[:]); err != nil {
 					return err
 				}
 
-				address.Port = int(binary.BigEndian.Uint16(port[:]))
+				addr.Port = int(binary.BigEndian.Uint16(port[:]))
 
 				addrBytesRead += aType.AddrLen()
 
-				addresses = append(addresses, address)
-
 			case tcp6Addr:
-				address := &net.TCPAddr{}
+				addr := &net.TCPAddr{}
 				var ip [16]byte
 				if _, err = io.ReadFull(addrBuf, ip[:]); err != nil {
 					return err
 				}
-				address.IP = (net.IP)(ip[:])
+				addr.IP = (net.IP)(ip[:])
 
 				var port [2]byte
 				if _, err = io.ReadFull(addrBuf, port[:]); err != nil {
 					return err
 				}
-				address.Port = int(binary.BigEndian.Uint16(port[:]))
+				addr.Port = int(binary.BigEndian.Uint16(port[:]))
 
 				addrBytesRead += aType.AddrLen()
 
-				addresses = append(addresses, address)
-
 			case v2OnionAddr:
-				address := &torsvc.OnionAddress{}
+				addr := &torsvc.OnionAddress{}
 				var hs [10]byte
 				if _, err = io.ReadFull(addrBuf, hs[:]); err != nil {
 					return err
 				}
-				onionString := encoding.EncodeToString(hs[:]) + ".onion"
-				address.HiddenService = onionString
+				onionString := base32Encoding.EncodeToString(hs[:]) + ".onion"
+				addr.HiddenService = onionString
 
 				var port [2]byte
 				if _, err = io.ReadFull(addrBuf, port[:]); err != nil {
 					return err
 				}
-				address.Port = int(binary.BigEndian.Uint16(port[:]))
+				addr.Port = int(binary.BigEndian.Uint16(port[:]))
 
 				addrBytesRead += aType.AddrLen()
 
-				addresses = append(addresses, address)
-
 			case v3OnionAddr:
-				address := &torsvc.OnionAddress{}
+				addr := &torsvc.OnionAddress{}
 				var hs [35]byte
 				if _, err = io.ReadFull(addrBuf, hs[:]); err != nil {
 					return err
 				}
-				onionString := encoding.EncodeToString(hs[:]) + ".onion"
-				address.HiddenService = onionString
+				onionString := base32Encoding.EncodeToString(hs[:]) + ".onion"
+				addr.HiddenService = onionString
 
 				var port [2]byte
 				if _, err = io.ReadFull(addrBuf, port[:]); err != nil {
 					return err
 				}
-				address.Port = int(binary.BigEndian.Uint16(port[:]))
+				addr.Port = int(binary.BigEndian.Uint16(port[:]))
 
 				addrBytesRead += aType.AddrLen()
-
-				addresses = append(addresses, address)
 
 			default:
 				return fmt.Errorf("unknown address type: %v", aType)
 			}
+
+			addresses = append(addresses, addr)
 		}
 
 		*e = addresses

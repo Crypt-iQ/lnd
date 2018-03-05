@@ -9,13 +9,23 @@ import (
 	"github.com/lightningnetwork/lnd/torsvc"
 )
 
-// alphabet is the alphabet that the base32 library will use for encoding
-// and decoding v2 and v3 onion addresses.
-const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+const (
+	// alphabet is the alphabet that the base32 library will use for encoding
+	// and decoding v2 and v3 onion addresses.
+	alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+
+	// v2OnionLength is the length of a fully encoded v2 hidden service string
+	// including the .onion suffix.
+	v2OnionLength = 22
+
+	// v3OnionLength is the length of a fully encoded v3 hidden service string
+	// including the .onion suffix.
+	v3OnionLength = 62
+)
 
 // encoding represents a base32 encoding compliant with Tor's base32 encoding
 // scheme for v2 and v3 hidden services.
-var encoding = base32.NewEncoding(alphabet)
+var base32Encoding = base32.NewEncoding(alphabet)
 
 // addressType specifies the network protocol and version that should be used
 // when connecting to a node at a particular address.
@@ -72,15 +82,15 @@ func encodeTCPAddr(w io.Writer, addr *net.TCPAddr) error {
 func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 	var scratch [2]byte
 
-	if len(addr.HiddenService) == 22 {
+	hsLen := len(addr.HiddenService)
+	if hsLen == v2OnionLength {
 		// v2 hidden service
-		scratch[0] = uint8(v2OnionAddr)
-		if _, err := w.Write(scratch[:1]); err != nil {
+		if _, err := w.Write([]byte{v2OnionAddr}); err != nil {
 			return err
 		}
 
-		// Write raw bytes of unbase32 hidden service string
-		data, err := encoding.DecodeString(addr.String()[:16])
+		// Write raw bytes of base32-decoded hidden service string
+		data, err := base32Encoding.DecodeString(addr.String()[:v2OnionLength-6])
 		if err != nil {
 			return err
 		}
@@ -95,13 +105,12 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 		}
 	} else {
 		// v3 hidden service
-		scratch[0] = uint8(v3OnionAddr)
-		if _, err := w.Write(scratch[:1]); err != nil {
+		if _, err := w.Write([]byte{v3OnionAddr}); err != nil {
 			return err
 		}
 
-		// Write raw bytes of unbase32 hidden service string
-		data, err := encoding.DecodeString(addr.String()[:56])
+		// Write raw bytes of base32-decoded hidden service string
+		data, err := base32Encoding.DecodeString(addr.String()[:v3OnionLength-6])
 		if err != nil {
 			return err
 		}
@@ -161,7 +170,7 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		if _, err := r.Read(hs[:]); err != nil {
 			return nil, err
 		}
-		onionString := encoding.EncodeToString(hs[:]) + ".onion"
+		onionString := base32Encoding.EncodeToString(hs[:]) + ".onion"
 		addr.HiddenService = onionString
 		if _, err := r.Read(scratch[:2]); err != nil {
 			return nil, err
@@ -174,7 +183,7 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		if _, err := r.Read(hs[:]); err != nil {
 			return nil, err
 		}
-		onionString := encoding.EncodeToString(hs[:]) + ".onion"
+		onionString := base32Encoding.EncodeToString(hs[:]) + ".onion"
 		addr.HiddenService = onionString
 		if _, err := r.Read(scratch[:2]); err != nil {
 			return nil, err

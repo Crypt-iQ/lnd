@@ -36,6 +36,16 @@ import (
 	"github.com/lightningnetwork/lnd/torsvc"
 )
 
+const (
+	// v2OnionLength is the length of a fully encoded v2 hidden service string
+	// including the .onion suffix.
+	v2OnionLength = 22
+
+	// v3OnionLength is the length of a fully encoded v3 hidden service string
+	// including the .onion suffix.
+	v3OnionLength = 62
+)
+
 var (
 	// ErrPeerNotFound signals that the server has no connection to the
 	// given peer.
@@ -235,7 +245,10 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		ipLen := len(ip)
 		host, port, err := net.SplitHostPort(ip)
 		if err != nil {
-			if (ipLen == 22 || ipLen == 62) && ip[ipLen-6:] == ".onion" {
+			// We check if the length of ip is equal to v2OnionLength
+			// or v3onionLength AND ends in the .onion suffix. If so,
+			// we have a hidden service.
+			if (ipLen == v2OnionLength || ipLen == v3OnionLength) && ip[ipLen-6:] == ".onion" {
 				// hidden service without a port
 				onionAddr := &torsvc.OnionAddress{
 					HiddenService: ip,
@@ -253,7 +266,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 			}
 		} else {
 			hostLen := len(host)
-			if (hostLen == 22 || hostLen == 62) && host[hostLen-6:] == ".onion" {
+			if (hostLen == v2OnionLength || hostLen == v3OnionLength) && host[hostLen-6:] == ".onion" {
 				// hidden service with port
 				p, err := strconv.Atoi(port)
 				if err != nil {

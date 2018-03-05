@@ -324,16 +324,6 @@ func loadConfig() (*config, error) {
 			return nil, err
 		}
 
-		// If ExternalIPs is set, throw an error since we cannot
-		// listen for incoming connections via Tor's SOCKS5 proxy.
-		if len(cfg.ExternalIPs) != 0 {
-			str := "%s: Cannot set externalip flag with proxy flag - " +
-				"cannot listen for incoming connections via Tor's " +
-				"socks5 proxy"
-			err := fmt.Errorf(str, funcName)
-			return nil, err
-		}
-
 		cfg.net = &torsvc.TorProxyNet{
 			TorDNS:          cfg.Tor.DNS,
 			TorSocks:        cfg.Tor.Socks,

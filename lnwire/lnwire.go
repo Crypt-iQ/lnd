@@ -314,7 +314,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 
 		if e.IP.To4() != nil {
-			if _, err := w.Write([]byte{tcp4Addr}); err != nil {
+			if _, err := w.Write([]byte{uint8(tcp4Addr)}); err != nil {
 				return err
 			}
 
@@ -324,7 +324,7 @@ func writeElement(w io.Writer, element interface{}) error {
 				return err
 			}
 		} else {
-			if _, err := w.Write([]byte{tcp6Addr}); err != nil {
+			if _, err := w.Write([]byte{uint8(tcp6Addr)}); err != nil {
 				return err
 			}
 			var ip [16]byte
@@ -342,7 +342,7 @@ func writeElement(w io.Writer, element interface{}) error {
 	case *torsvc.OnionAddress:
 		if len(e.HiddenService) == v2OnionLength {
 			// v2 hidden service
-			if _, err := w.Write([]byte{v2OnionAddr}); err != nil {
+			if _, err := w.Write([]byte{uint8(v2OnionAddr)}); err != nil {
 				return err
 			}
 
@@ -364,7 +364,7 @@ func writeElement(w io.Writer, element interface{}) error {
 
 		} else {
 			// v3 hidden service
-			if _, err := w.Write([]byte{v3OnionAddr}); err != nil {
+			if _, err := w.Write([]byte{uint8(v3OnionAddr)}); err != nil {
 				return err
 			}
 

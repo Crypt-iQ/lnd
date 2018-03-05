@@ -49,8 +49,7 @@ func encodeTCPAddr(w io.Writer, addr *net.TCPAddr) error {
 	var scratch [16]byte
 
 	if addr.IP.To4() != nil {
-		scratch[0] = uint8(tcp4Addr)
-		if _, err := w.Write(scratch[:1]); err != nil {
+		if _, err := w.Write([]byte{uint8(tcp4Addr)}); err != nil {
 			return err
 		}
 
@@ -60,8 +59,7 @@ func encodeTCPAddr(w io.Writer, addr *net.TCPAddr) error {
 		}
 
 	} else {
-		scratch[0] = uint8(tcp6Addr)
-		if _, err := w.Write(scratch[:1]); err != nil {
+		if _, err := w.Write([]byte{uint8(tcp6Addr)}); err != nil {
 			return err
 		}
 
@@ -85,7 +83,7 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 	hsLen := len(addr.HiddenService)
 	if hsLen == v2OnionLength {
 		// v2 hidden service
-		if _, err := w.Write([]byte{v2OnionAddr}); err != nil {
+		if _, err := w.Write([]byte{uint8(v2OnionAddr)}); err != nil {
 			return err
 		}
 
@@ -105,7 +103,7 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 		}
 	} else {
 		// v3 hidden service
-		if _, err := w.Write([]byte{v3OnionAddr}); err != nil {
+		if _, err := w.Write([]byte{uint8(v3OnionAddr)}); err != nil {
 			return err
 		}
 

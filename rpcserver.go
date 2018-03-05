@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +24,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
-	"github.com/lightningnetwork/lnd/torsvc"
 	"github.com/lightningnetwork/lnd/zpay32"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/btcec"
@@ -271,14 +268,6 @@ const (
 	// maxPaymentMSat is the maximum allowed payment permitted currently as
 	// defined in BOLT-0002.
 	maxPaymentMSat = lnwire.MilliSatoshi(math.MaxUint32)
-
-	// v2OnionLength is the length of a fully encoded v2 hidden service string
-	// including the .onion suffix.
-	v2OnionLength = 22
-
-	// v3OnionLength is the length of a fully encoded v3 hidden service string
-	// including the .onion suffix.
-	v3OnionLength = 62
 )
 
 // rpcServer is a gRPC, RPC front end to the lnd daemon.

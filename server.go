@@ -148,7 +148,7 @@ type server struct {
 func parseAddrString(ip string) (net.Addr, error) {
 	var host net.Addr
 	ipLen := len(ip)
-	host, port, err := net.SplitHostPort(ip)
+	h, port, err := net.SplitHostPort(ip)
 	if err != nil {
 		// We check if the length of ip is equal to v2OnionLength or
 		// v3OnionLength AND ends in the .onion suffix. If so, we have
@@ -173,9 +173,9 @@ func parseAddrString(ip string) (net.Addr, error) {
 		}
 	} else {
 		// SplitHostPort did not return an error, so a port was specified.
-		hostLen := len(host)
+		hostLen := len(h)
 		if (hostLen == v2OnionLength || hostLen == v3OnionLength) &&
-			host[hostLen-6:] == ".onion" {
+			h[hostLen-6:] == ".onion" {
 			// hidden service with a port
 			p, err := strconv.Atoi(port)
 			if err != nil {

@@ -145,6 +145,8 @@ type server struct {
 }
 
 // parseAddrString takes a host string and parses it, returning a net.Addr.
+// In the case of non-onion addresses, it will use cfg.net.ResolveTCPAddr in case
+// domains are to be resolved over Tor.
 func parseAddrString(ip string) (net.Addr, error) {
 	var host net.Addr
 	ipLen := len(ip)
@@ -183,7 +185,7 @@ func parseAddrString(ip string) (net.Addr, error) {
 			}
 
 			host = &torsvc.OnionAddress{
-				HiddenService: ip,
+				HiddenService: h,
 				Port:          p,
 			}
 		} else {
@@ -293,7 +295,8 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	// If external IP addresses have been specified, add those to the list
 	// of this server's addresses. We need to use the cfg.net.ResolveTCPAddr
 	// function in case we wish to resolve hosts over Tor since domains
-	// CAN be passed into the ExternalIPs configuration option.
+	// CAN be passed into the ExternalIPs configuration option. ResolveTCPAddr
+	// is called in parseAddrString.
 	selfAddrs := make([]net.Addr, 0, len(cfg.ExternalIPs))
 	for _, ip := range cfg.ExternalIPs {
 		host, err := parseAddrString(ip)

@@ -330,10 +330,6 @@ func loadConfig() (*config, error) {
 			StreamIsolation: cfg.Tor.StreamIsolation,
 		}
 
-		// If we are using Tor, since we only want connections routed
-		// through Tor, listening is disabled.
-		cfg.DisableListen = true
-
 	} else if cfg.Tor.Socks != "" || cfg.Tor.DNS != "" {
 		// Both TorSocks and TorDNS must be set.
 		str := "%s: Both the tor.socks and the tor.dns flags must be set" +

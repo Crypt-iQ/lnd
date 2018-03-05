@@ -271,6 +271,14 @@ const (
 	// maxPaymentMSat is the maximum allowed payment permitted currently as
 	// defined in BOLT-0002.
 	maxPaymentMSat = lnwire.MilliSatoshi(math.MaxUint32)
+
+	// v2OnionLength is the length of a fully encoded v2 hidden service string
+	// including the .onion suffix.
+	v2OnionLength = 22
+
+	// v3OnionLength is the length of a fully encoded v3 hidden service string
+	// including the .onion suffix.
+	v3OnionLength = 62
 )
 
 // rpcServer is a gRPC, RPC front end to the lnd daemon.
@@ -554,6 +562,65 @@ func (r *rpcServer) VerifyMessage(ctx context.Context,
 	}, nil
 }
 
+// parseAddr takes a *LightningAddress and parses its Host member, returning a
+// net.Addr that can either be a *torsvc.OnionAddress or a *net.TCPAddr.
+func parseAddr(lnAddr *lnrpc.LightningAddress) (net.Addr, error) {
+	var host net.Addr
+	addrLen := len(lnAddr.Host)
+	h, p, err := net.SplitHostPort(lnAddr.Host)
+	if err != nil {
+		if (addrLen == v2OnionLength || addrLen == v3OnionLength) &&
+			lnAddr.Host[addrLen-6:] == ".onion" {
+			// Since SplitHostPort returned an error, this is a
+			// hidden service without a port specified. We will use
+			// the default virtual port (80) as specified in config.go.
+			host = &torsvc.OnionAddress{
+				HiddenService: lnAddr.Host,
+				Port:          defaultOnionPort,
+			}
+		} else {
+			// This is not a hidden service. It is either an ipv4 or
+			// ipv6 address without a port specified.
+			addr := net.JoinHostPort(lnAddr.Host, strconv.Itoa(defaultPeerPort))
+
+			// We use ResolveTCPAddr here in case we wish to resolve
+			// hosts over Tor.
+			host, err = cfg.net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		hostLen := len(h)
+		if (hostLen == v2OnionLength || hostLen == v3OnionLength) &&
+			h[hostLen-6:] == ".onion" {
+			// SplitHostPort did not return an error, so this hidden
+			// service was specified with a port.
+			port, err := strconv.Atoi(p)
+			if err != nil {
+				return nil, err
+			}
+
+			host = &torsvc.OnionAddress{
+				HiddenService: h,
+				Port:          port,
+			}
+		} else {
+			// This is not a hidden service. It is either an ipv4
+			// or ipv6 address with the port specified.
+
+			// We use ResolveTCPAddr here in case we wish to resolve
+			// hosts over Tor.
+			host, err = cfg.net.ResolveTCPAddr("tcp", lnAddr.Host)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return host, nil
+}
+
 // ConnectPeer attempts to establish a connection to a remote peer.
 func (r *rpcServer) ConnectPeer(ctx context.Context,
 	in *lnrpc.ConnectPeerRequest) (*lnrpc.ConnectPeerResponse, error) {
@@ -583,48 +650,10 @@ func (r *rpcServer) ConnectPeer(ctx context.Context,
 		return nil, fmt.Errorf("cannot make connection to self")
 	}
 
-	var host net.Addr
-	addrLen := len(in.Addr.Host)
-	h, p, err := net.SplitHostPort(in.Addr.Host)
+	// Parse the address to a net.Addr using parseAddr.
+	host, err := parseAddr(in.Addr)
 	if err != nil {
-		if (addrLen == 22 || addrLen == 62) && in.Addr.Host[addrLen-6:] == ".onion" {
-			// hidden service without a port
-			host = &torsvc.OnionAddress{
-				HiddenService: in.Addr.Host,
-				Port:          defaultOnionPort,
-			}
-		} else {
-			// ipv4/6 address without a port
-			addr := net.JoinHostPort(in.Addr.Host, strconv.Itoa(defaultPeerPort))
-
-			// We use ResolveTCPAddr here in case we wish to resolve hosts over Tor.
-			host, err = cfg.net.ResolveTCPAddr("tcp", addr)
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		hostLen := len(h)
-		if (hostLen == 22 || hostLen == 62) && h[hostLen-6:] == ".onion" {
-			// hidden service with port
-			port, err := strconv.Atoi(p)
-			if err != nil {
-				return nil, err
-			}
-
-			host = &torsvc.OnionAddress{
-				HiddenService: h,
-				Port:          port,
-			}
-		} else {
-			// ipv4/6 address with port
-
-			// We use ResolveTCPAddr here in case we wish to resolve hosts over Tor.
-			host, err = cfg.net.ResolveTCPAddr("tcp", in.Addr.Host)
-			if err != nil {
-				return nil, err
-			}
-		}
+		return nil, err
 	}
 
 	peerAddr := &lnwire.NetAddress{

@@ -144,6 +144,60 @@ type server struct {
 	wg sync.WaitGroup
 }
 
+// parseAddrString takes a host string and parses it, returning a net.Addr.
+func parseAddrString(ip string) (net.Addr, error) {
+	var host net.Addr
+	ipLen := len(ip)
+	host, port, err := net.SplitHostPort(ip)
+	if err != nil {
+		// We check if the length of ip is equal to v2OnionLength or
+		// v3OnionLength AND ends in the .onion suffix. If so, we have
+		// a hidden service.
+
+		// Since SplitHostPort returned an error, no port was specified.
+		if (ipLen == v2OnionLength || ipLen == v3OnionLength) &&
+			ip[ipLen-6:] == ".onion" {
+			// hidden service without a port.
+			host = &torsvc.OnionAddress{
+				HiddenService: ip,
+				Port:          defaultOnionPort,
+			}
+		} else {
+			// This is not a hidden service, so it is either an ipv4
+			// or ipv6 address without a port specified.
+			addr := net.JoinHostPort(ip, strconv.Itoa(defaultPeerPort))
+			host, err = cfg.net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		// SplitHostPort did not return an error, so a port was specified.
+		hostLen := len(host)
+		if (hostLen == v2OnionLength || hostLen == v3OnionLength) &&
+			host[hostLen-6:] == ".onion" {
+			// hidden service with a port
+			p, err := strconv.Atoi(port)
+			if err != nil {
+				return nil, err
+			}
+
+			host = &torsvc.OnionAddress{
+				HiddenService: ip,
+				Port:          p,
+			}
+		} else {
+			// ipv4/6 address with a port
+			host, err = cfg.net.ResolveTCPAddr("tcp", ip)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return host, nil
+}
+
 // newServer creates a new instance of the server which is to listen using the
 // passed listener address.
 func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
@@ -242,51 +296,12 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	// CAN be passed into the ExternalIPs configuration option.
 	selfAddrs := make([]net.Addr, 0, len(cfg.ExternalIPs))
 	for _, ip := range cfg.ExternalIPs {
-		ipLen := len(ip)
-		host, port, err := net.SplitHostPort(ip)
+		host, err := parseAddrString(ip)
 		if err != nil {
-			// We check if the length of ip is equal to v2OnionLength
-			// or v3onionLength AND ends in the .onion suffix. If so,
-			// we have a hidden service.
-			if (ipLen == v2OnionLength || ipLen == v3OnionLength) && ip[ipLen-6:] == ".onion" {
-				// hidden service without a port
-				onionAddr := &torsvc.OnionAddress{
-					HiddenService: ip,
-					Port:          defaultOnionPort,
-				}
-				selfAddrs = append(selfAddrs, onionAddr)
-			} else {
-				// ipv4/6 address without a port
-				addr := net.JoinHostPort(ip, strconv.Itoa(defaultPeerPort))
-				lnAddr, err := cfg.net.ResolveTCPAddr("tcp", addr)
-				if err != nil {
-					return nil, err
-				}
-				selfAddrs = append(selfAddrs, lnAddr)
-			}
-		} else {
-			hostLen := len(host)
-			if (hostLen == v2OnionLength || hostLen == v3OnionLength) && host[hostLen-6:] == ".onion" {
-				// hidden service with port
-				p, err := strconv.Atoi(port)
-				if err != nil {
-					return nil, err
-				}
-
-				onionAddr := &torsvc.OnionAddress{
-					HiddenService: host,
-					Port:          p,
-				}
-				selfAddrs = append(selfAddrs, onionAddr)
-			} else {
-				// ipv4/6 address with port
-				lnAddr, err := cfg.net.ResolveTCPAddr("tcp", ip)
-				if err != nil {
-					return nil, err
-				}
-				selfAddrs = append(selfAddrs, lnAddr)
-			}
+			return nil, err
 		}
+
+		selfAddrs = append(selfAddrs, host)
 	}
 
 	// This code handles authenticating and dynamically creating v2 hidden

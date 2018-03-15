@@ -2,7 +2,6 @@ package lnwire
 
 import (
 	"bytes"
-	"encoding/base32"
 	"encoding/binary"
 	"fmt"
 	"image/color"
@@ -22,14 +21,6 @@ import (
 // MaxSliceLength is the maximum allowed length for any opaque byte slices in
 // the wire protocol.
 const MaxSliceLength = 65535
-
-// alphabet is the alphabet that the base32 library will use for encoding
-// and decoding v2 and v3 onion addresses.
-const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
-
-// encoding represents a base32 encoding compliant with Tor's base32 encoding
-// scheme for v2 and v3 hidden services.
-var encoding = base32.NewEncoding(alphabet)
 
 // PkScript is simple type definition which represents a raw serialized public
 // key script.
@@ -346,7 +337,7 @@ func writeElement(w io.Writer, element interface{}) error {
 
 			// unbase32 the v2 hidden service string, truncating
 			// the .onion suffix
-			data, err := encoding.DecodeString(e.String()[:16])
+			data, err := torsvc.Base32Encoding.DecodeString(e.String()[:16])
 			if err != nil {
 				return err
 			}
@@ -371,7 +362,7 @@ func writeElement(w io.Writer, element interface{}) error {
 
 			// unbase32 the v3 hidden service string, truncating
 			// the .onion suffix
-			data, err := encoding.DecodeString(e.String()[:56])
+			data, err := torsvc.Base32Encoding.DecodeString(e.String()[:56])
 			if err != nil {
 				return err
 			}
@@ -740,7 +731,7 @@ func readElement(r io.Reader, element interface{}) error {
 				if _, err = io.ReadFull(addrBuf, hs[:]); err != nil {
 					return err
 				}
-				onionString := encoding.EncodeToString(hs[:]) + ".onion"
+				onionString := torsvc.Base32Encoding.EncodeToString(hs[:]) + ".onion"
 				address.HiddenService = onionString
 
 				var port [2]byte
@@ -759,7 +750,7 @@ func readElement(r io.Reader, element interface{}) error {
 				if _, err = io.ReadFull(addrBuf, hs[:]); err != nil {
 					return err
 				}
-				onionString := encoding.EncodeToString(hs[:]) + ".onion"
+				onionString := torsvc.Base32Encoding.EncodeToString(hs[:]) + ".onion"
 				address.HiddenService = onionString
 
 				var port [2]byte

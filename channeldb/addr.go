@@ -1,21 +1,12 @@
 package channeldb
 
 import (
-	"encoding/base32"
 	"io"
 	"net"
 
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/lightningnetwork/lnd/torsvc"
 )
-
-// alphabet is the alphabet that the base32 library will use for encoding
-// and decoding v2 and v3 onion addresses.
-const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
-
-// encoding represents a base32 encoding compliant with Tor's base32 encoding
-// scheme for v2 and v3 hidden services.
-var encoding = base32.NewEncoding(alphabet)
 
 // addressType specifies the network protocol and version that should be used
 // when connecting to a node at a particular address.
@@ -80,7 +71,7 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 		}
 
 		// Write raw bytes of unbase32 hidden service string
-		data, err := encoding.DecodeString(addr.String()[:16])
+		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:16])
 		if err != nil {
 			return err
 		}
@@ -101,7 +92,7 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 		}
 
 		// Write raw bytes of unbase32 hidden service string
-		data, err := encoding.DecodeString(addr.String()[:56])
+		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:56])
 		if err != nil {
 			return err
 		}
@@ -161,7 +152,7 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		if _, err := r.Read(hs[:]); err != nil {
 			return nil, err
 		}
-		onionString := encoding.EncodeToString(hs[:]) + ".onion"
+		onionString := torsvc.Base32Encoding.EncodeToString(hs[:]) + ".onion"
 		addr.HiddenService = onionString
 		if _, err := r.Read(scratch[:2]); err != nil {
 			return nil, err
@@ -174,7 +165,7 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 		if _, err := r.Read(hs[:]); err != nil {
 			return nil, err
 		}
-		onionString := encoding.EncodeToString(hs[:]) + ".onion"
+		onionString := torsvc.Base32Encoding.EncodeToString(hs[:]) + ".onion"
 		addr.HiddenService = onionString
 		if _, err := r.Read(scratch[:2]); err != nil {
 			return nil, err

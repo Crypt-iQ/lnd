@@ -6,6 +6,7 @@ import (
 
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/lightningnetwork/lnd/torsvc"
+	"fmt"
 )
 
 // addressType specifies the network protocol and version that should be used
@@ -63,15 +64,35 @@ func encodeTCPAddr(w io.Writer, addr *net.TCPAddr) error {
 func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 	var scratch [2]byte
 
-	if len(addr.HiddenService) == 22 {
+	hsLen := len(addr.HiddenService)
+	if hsLen == torsvc.V2OnionLengthSuffix {
 		// v2 hidden service
-		scratch[0] = uint8(v2OnionAddr)
-		if _, err := w.Write(scratch[:1]); err != nil {
+		if _, err := w.Write([]byte{uint8(v2OnionAddr)}); err != nil {
 			return err
 		}
 
 		// Write raw bytes of unbase32 hidden service string
-		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:16])
+		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:torsvc.V2OnionLengthNoSuffix])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+
+		// Write port
+		byteOrder.PutUint16(scratch[:2], uint16(addr.Port))
+		if _, err := w.Write(scratch[:2]); err != nil {
+			return err
+		}
+	} else if hsLen == torsvc.V3OnionLengthSuffix {
+		// v3 hidden service
+		if _, err := w.Write([]byte{uint8(v3OnionAddr)}); err != nil {
+			return err
+		}
+
+		// Write raw bytes of unbase32 hidden service string
+		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:torsvc.V3OnionLengthNoSuffix])
 		if err != nil {
 			return err
 		}
@@ -85,26 +106,7 @@ func encodeOnionAddr(w io.Writer, addr *torsvc.OnionAddress) error {
 			return err
 		}
 	} else {
-		// v3 hidden service
-		scratch[0] = uint8(v3OnionAddr)
-		if _, err := w.Write(scratch[:1]); err != nil {
-			return err
-		}
-
-		// Write raw bytes of unbase32 hidden service string
-		data, err := torsvc.Base32Encoding.DecodeString(addr.String()[:56])
-		if err != nil {
-			return err
-		}
-		if _, err := w.Write(data); err != nil {
-			return err
-		}
-
-		// Write port
-		byteOrder.PutUint16(scratch[:2], uint16(addr.Port))
-		if _, err := w.Write(scratch[:2]); err != nil {
-			return err
-		}
+		return fmt.Errorf("Invalid hidden service length")
 	}
 
 	return nil

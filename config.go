@@ -129,10 +129,10 @@ type autoPilotConfig struct {
 }
 
 type torConfig struct {
-	Socks           string `long:"socks" description:"The port that Tor's exposed SOCKS5 proxy is listening on. Using Tor allows outbound-only connections (listening will be disabled) -- NOTE port must be between 1024 and 65535"`
+	Socks           string `long:"socks" description:"The port that Tor's exposed SOCKS5 proxy is listening on. Using Tor allows outbound-only connections -- NOTE port must be between 1024 and 65535"`
 	Control         string `long:"control" description:"The port that Tor's ControlPort is listening on -- NOTE port must be between 1024 and 65535"`
 	ControlPassword string `long:"controlpass" description:"The password to be used for authenticating to Tor's ControlPort."`
-	VirtPort        string `long:"virtport" description:"The virtual port as described in Tor's control-spec to be used when creating hidden services -- NOTE port can be below 1024"`
+	VirtPort        string `long:"virtport" description:"The virtual port as described in Tor's control-spec to be used when creating hidden services -- NOTE port must be between 1 and 65535"`
 	TargPort        string `long:"targport" description:"The target port as described in Tor's control-spec to be used when creating hidden services -- NOTE port must be between 1024 and 65535"`
 	PrivKey         string `long:"privkey" description:"The private key used to create a hidden service."`
 	DNS             string `long:"dns" description:"The DNS server as IP:PORT that Tor will use for SRV queries - NOTE must have TCP resolution enabled"`
@@ -354,16 +354,6 @@ func loadConfig() (*config, error) {
 			err := fmt.Errorf(str, funcName)
 			fmt.Fprintln(os.Stderr, err)
 			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, err
-		}
-
-		// If ExternalIPs is set, throw an error since we cannot
-		// listen for incoming connections via Tor's SOCKS5 proxy.
-		if len(cfg.ExternalIPs) != 0 {
-			str := "%s: Cannot set externalip flag with proxy flag - " +
-				"cannot listen for incoming connections via Tor's " +
-				"socks5 proxy"
-			err := fmt.Errorf(str, funcName)
 			return nil, err
 		}
 

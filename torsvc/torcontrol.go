@@ -33,7 +33,6 @@ type TorControl struct {
 	TargPort string
 	VirtPort string
 	PrivKey  string
-	Save     bool
 }
 
 // AuthWithPass authenticates via password to Tor's ControlPort.

@@ -334,6 +334,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 			return nil, err
 		}
 
+		// TODO(eugene) - Option for SAFECOOKIE authentication.
 		// Authenticate to Tor's ControlPort.
 		if err := s.torCtrl.AuthWithPass(); err != nil {
 			return nil, err

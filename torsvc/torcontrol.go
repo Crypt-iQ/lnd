@@ -91,12 +91,6 @@ func (tc *TorControl) AddOnion() (string, error) {
 	return messageStr[j+1 : k], err
 }
 
-// DelOnion deletes a Tor v2 hidden service given its ServiceID.
-func (tc *TorControl) DelOnion() error {
-	// TODO(eugene)
-	return nil
-}
-
 // Open opens the connection to Tor's ControlPort.
 func (tc *TorControl) Open() error {
 	var err error

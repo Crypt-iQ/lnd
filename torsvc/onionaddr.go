@@ -1,9 +1,15 @@
 package torsvc
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base32"
+	"encoding/base64"
 	"net"
 	"strconv"
+
+	"golang.org/x/crypto/ed25519"
 )
 
 const (
@@ -55,4 +61,31 @@ func (o *OnionAddress) String() string {
 func (o *OnionAddress) Network() string {
 	// Tor only allows "tcp".
 	return "tcp"
+}
+
+// generateRSA1024Key is a utility function which generates a base64-encoded
+// RSA1024 private key.
+func generateRSA1024Key() string {
+	// Generate a RSA1024 key.
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 1024)
+
+	// Marshal the RSA1024 key.
+	rsaMarshall := x509.MarshalPKCS1PrivateKey(rsaKey)
+
+	// Convert the marshalled RSA1024 key to base64.
+	rsaBase64 := base64.StdEncoding.EncodeToString(rsaMarshall)
+
+	return rsaBase64
+}
+
+// generateED25519Key is a utility function which generates a base64-encoded
+// ED25519 private key.
+func generateED25519Key() string {
+	// Generate a ED25519 key.
+	_, edKey, _ := ed25519.GenerateKey(nil)
+
+	// Convert the ED25519 key to base 64.
+	edBase64 := base64.StdEncoding.EncodeToString([]byte(edKey))
+
+	return edBase64
 }

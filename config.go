@@ -134,7 +134,6 @@ type torConfig struct {
 	ControlPassword string `long:"controlpass" description:"The password to be used for authenticating to Tor's ControlPort."`
 	VirtPort        string `long:"virtport" description:"The virtual port as described in Tor's control-spec to be used when creating hidden services -- NOTE port must be between 1 and 65535"`
 	TargPort        string `long:"targport" description:"The target port as described in Tor's control-spec to be used when creating hidden services -- NOTE port must be between 1024 and 65535"`
-	PrivKey         string `long:"privkey" description:"The private key used to create a hidden service."`
 	DNS             string `long:"dns" description:"The DNS server as IP:PORT that Tor will use for SRV queries - NOTE must have TCP resolution enabled"`
 	StreamIsolation bool   `long:"streamisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 }
@@ -410,7 +409,7 @@ func loadConfig() (*config, error) {
 			return nil, err
 		}
 
-		// If no private key is given, we will generate one.
+		// Look for LND hidden service private key file.
 		if cfg.Tor.PrivKey != "" {
 			// TODO(eugene) - generate private key
 			// This should not be a command line option. Instead,

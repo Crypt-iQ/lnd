@@ -154,9 +154,9 @@ type Message interface {
 	MaxPayloadLength(uint32) uint32
 }
 
-// makeEmptyMessage creates a new empty message of the proper concrete type
+// MakeEmptyMessage creates a new empty message of the proper concrete type
 // based on the passed message type.
-func makeEmptyMessage(msgType MessageType) (Message, error) {
+func MakeEmptyMessage(msgType MessageType) (Message, error) {
 	var msg Message
 
 	switch msgType {
@@ -284,7 +284,7 @@ func ReadMessage(r io.Reader, pver uint32) (Message, error) {
 
 	// Now that we know the target message type, we can create the proper
 	// empty message type and decode the message into it.
-	msg, err := makeEmptyMessage(msgType)
+	msg, err := MakeEmptyMessage(msgType)
 	if err != nil {
 		return nil, err
 	}

@@ -29,7 +29,12 @@ After reading this document, you too may be able to find errors in `lnd` with
 ### Setup and Installation ###
 This section will cover setup and installation of `go-fuzz`.
 
-* First, we must get `go-fuzz`:
+* First, we must get `go-fuzz`.
+* Note: If you already have `go-fuzz` installed and want to update, you must delete it from `$GOPATH/src/github.com/dvyukov/` and then run:
+```
+go get -u github.com/dvyukov/go-fuzz/...
+```
+* Else... run the two following commands:
 ```
 $ go get github.com/dvyukov/go-fuzz/go-fuzz
 $ go get github.com/dvyukov/go-fuzz/go-fuzz-build

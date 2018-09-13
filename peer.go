@@ -1317,12 +1317,22 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 	// utilize all available space. We also ensure we cap the capacity of
 	// this new buffer to the static buffer which is sized for the largest
 	// possible protocol message.
-	b := bytes.NewBuffer(p.writeBuf[0:0:len(p.writeBuf)])
 
-	// With the temp buffer created and sliced properly (length zero, full
-	// capacity), we'll now encode the message directly into this buffer.
-	n, err := lnwire.WriteMessage(b, msg, 0)
-	atomic.AddUint64(&p.bytesSent, uint64(n))
+	var b *bytes.Buffer
+	var err error
+	var n int
+	if (msg.MsgType() == lnwire.MsgReplyChannelRange) {
+		var data []byte = []byte("\x01\b000000000000000000" +
+			"00000000000000000000" +
+			"000\x00\x00")
+		b = bytes.NewBuffer(data)
+	} else {
+		b = bytes.NewBuffer(p.writeBuf[0:0:len(p.writeBuf)])
+		// With the temp buffer created and sliced properly (length zero, full
+		// capacity), we'll now encode the message directly into this buffer.
+		n, err = lnwire.WriteMessage(b, msg, 0)
+		atomic.AddUint64(&p.bytesSent, uint64(n))
+	}
 
 	p.conn.SetWriteDeadline(time.Now().Add(writeMessageTimeout))
 

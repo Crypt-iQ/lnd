@@ -1,6 +1,8 @@
 package lnwire
 
-import "io"
+import (
+	"io"
+)
 
 // ReplyChannelRange is the response to the QueryChannelRange message. It
 // includes the original query, and the next streaming chunk of encoded short

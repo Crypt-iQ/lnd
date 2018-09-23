@@ -1,10 +1,10 @@
-package wirefuzz
+package fuzz
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"reflect"
 
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -18,12 +18,13 @@ func Fuzz(data []byte) int {
 
 	// Create a reader with the byte array.
 	r := bytes.NewReader(data)
+	bufReader := bufio.NewReader(r)
 
 	// Before deserializing the byte array into the desired message, we
 	// must check that the passed byte array is less than this message's
 	// max payload constraint.
-	var mType [2]byte
-	if _, err := io.ReadFull(r, mType[:]); err != nil {
+	mType, err := bufReader.Peek(2)
+	if err != nil {
 		// Ignore this input
 		return 0
 	}

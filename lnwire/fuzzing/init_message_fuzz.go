@@ -26,6 +26,8 @@ func Fuzz(data []byte) int {
 	// 	- Like the inflation bug idea.
 	// TODO - Are there other things we can test besides serialization and
 	// deserialization?
+	// TODO - So this only tests ONE message, perhaps the failure would not
+	// lie here, but in some other subsystem after the init message is accepted.
 
 	// Make sure byte array length (excluding 2 bytes for message type) is
 	// less than max payload size for the Init message. We check this because

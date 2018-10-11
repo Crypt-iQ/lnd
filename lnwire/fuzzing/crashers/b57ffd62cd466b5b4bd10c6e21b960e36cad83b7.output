@@ -1,0 +1,49 @@
+program hanged (timeout 10 seconds)
+
+SIGABRT: abort
+PC=0x11e1929 m=0 sigcode=0
+
+goroutine 1 [running]:
+github.com/lightningnetwork/lnd/lnwire.(*RawFeatureVector).Decode(0xc42000ede8, 0x148d4e0, 0xc4204c09a0, 0xc42000ede8, 0x0)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/features.go:181 +0x139 fp=0xc4202ab9c0 sp=0xc4202ab940 pc=0x11e1929
+github.com/lightningnetwork/lnd/lnwire.readElement(0x148d4e0, 0xc4204c09a0, 0x1202400, 0xc4204eac48, 0x0, 0x0)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/lnwire.go:505 +0x15da fp=0xc4202abd38 sp=0xc4202ab9c0 pc=0x11e6b8a
+github.com/lightningnetwork/lnd/lnwire.readElements(0x148d4e0, 0xc4204c09a0, 0xc4202abdc0, 0x2, 0x2, 0x1, 0xc4204eac40)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/lnwire.go:804 +0x79 fp=0xc4202abd88 sp=0xc4202abd38 pc=0x11e8629
+github.com/lightningnetwork/lnd/lnwire.(*Init).Decode(0xc4204eac40, 0x148d4e0, 0xc4204c09a0, 0x0, 0x0, 0x2)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/init_message.go:36 +0x9f fp=0xc4202abdf0 sp=0xc4202abd88 pc=0x11e24bf
+github.com/lightningnetwork/lnd/lnwire.ReadMessage(0x148d4e0, 0xc4204c09a0, 0x0, 0xc4204eaba0, 0xc400000000, 0xc3, 0x0)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/message.go:291 +0xf9 fp=0xc4202abe58 sp=0xc4202abdf0 pc=0x11e9619
+github.com/lightningnetwork/lnd/lnwire/fuzzing.Fuzz(0x2310000, 0xc2, 0x200000, 0x3)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/fuzzing/init_message_fuzz.go:59 +0x23c fp=0xc4202abef8 sp=0xc4202abe58 pc=0x11efd2c
+go-fuzz-dep.Main(0x1380908)
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/goroot/src/go-fuzz-dep/main.go:49 +0xad fp=0xc4202abf68 sp=0xc4202abef8 pc=0x106c62d
+main.main()
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/gopath/src/github.com/lightningnetwork/lnd/lnwire/fuzzing/go.fuzz.main/main.go:10 +0x2d fp=0xc4202abf80 sp=0xc4202abf68 pc=0x11eff8d
+runtime.main()
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/goroot/src/runtime/proc.go:185 +0x20d fp=0xc4202abfe0 sp=0xc4202abf80 pc=0x1029bdd
+runtime.goexit()
+	/var/folders/hd/zc89l1qn4h10b3hmg4nm4pzh0000gn/T/go-fuzz-build411209598/goroot/src/runtime/asm_amd64.s:2337 +0x1 fp=0xc4202abfe8 sp=0xc4202abfe0 pc=0x1051f41
+
+rax    0x3f0
+rbx    0x379
+rcx    0x1
+rdx    0x7e
+rdi    0xc4204b3900
+rsi    0x0
+rbp    0xc4202ab9b0
+rsp    0xc4202ab940
+r8     0x7e
+r9     0xffffffff
+r10    0xc4204b8800
+r11    0xc4204bbb98
+r12    0xc4204bbb9a
+r13    0x2
+r14    0xc4204bbba4
+r15    0x40
+rip    0x11e1929
+rflags 0x297
+cs     0x2b
+fs     0x0
+gs     0x0
+exit status 2

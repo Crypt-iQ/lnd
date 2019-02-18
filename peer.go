@@ -200,6 +200,9 @@ type peer struct {
 	// message is to be sent to a peer.
 	writeBuf *lnpeer.WriteBuffer
 
+	// TODO(eugene) - DynamicBanScore comment
+	DynamicBanScore *connmgr.DynamicBanScore
+
 	queueQuit chan struct{}
 	quit      chan struct{}
 	wg        sync.WaitGroup
@@ -240,6 +243,8 @@ func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 		failedChannels:     make(map[lnwire.ChannelID]struct{}),
 
 		writeBuf: server.writeBufferPool.Take(),
+
+		dynBanScore: &connmgr.DynamicBanScore{}
 
 		queueQuit: make(chan struct{}),
 		quit:      make(chan struct{}),

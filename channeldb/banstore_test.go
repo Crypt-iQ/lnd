@@ -17,7 +17,9 @@ const (
 )
 
 var (
-	gcInterval = time.Millisecond * 100
+	gcInterval = time.Second * 2
+
+	banDuration = time.Millisecond * 100
 
 	testPrivKeyBytes = [32]byte{
 		0xb7, 0x94, 0x38, 0x5f, 0x2d, 0x1e, 0xf7, 0xab,
@@ -81,8 +83,6 @@ func shutdown(dir string, g *GenericBanStore) {
 
 // TODO(eugene) - Test comment
 func TestGenericBanStoreGarbageCollector(t *testing.T) {
-	t.Parallel()
-
 	dbPath := tempBanStorePath(t)
 
 	g, err := startup(dbPath, gcInterval)
@@ -91,38 +91,228 @@ func TestGenericBanStoreGarbageCollector(t *testing.T) {
 	}
 	defer shutdown(dbPath, g)
 
-	err = g.BanPeer(testPubKey, time.Millisecond * 100, testIPV4Addr,
-		testIPV6Addr, testOnionV2Addr, testOnionV3Addr)
+	// Ban a pubkey and various addresses
+	err = g.BanPeer(testPubKey, banDuration, testIPV4Addr, testIPV6Addr,
+		testOnionV2Addr, testOnionV3Addr)
 	if err != nil {
 		t.Fatalf("Unable to ban peer: %v", err)
 	}
 
-	// Wait for both database write and for GC to unban the peer.
-	time.Sleep(time.Second)
+	// Wait for database write
+	time.Sleep(time.Millisecond * 500)
+
+	// Assert that the pubkey and addresses are banned
+	err = g.IsNodeBanned(testPubKey)
+	if err != ErrPubKeyIsBanned {
+		t.Fatalf("Failed to ban pubkey")
+	}
+
+	err = g.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatal("Failed to ban v4 addr")
+	}
+
+	err = g.IsAddrBanned(testIPV6Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban v6 addr")
+	}
+
+	err = g.IsAddrBanned(testOnionV2Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban onion v2 addr")
+	}
+
+	err = g.IsAddrBanned(testOnionV3Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban onion v3 addr")
+	}
+
+	// Wait for GC to unban entries
+	time.Sleep(time.Second * 5)
 
 	// Assert that neither the pubkey nor the addresses are banned
 	err = g.IsNodeBanned(testPubKey)
 	if err != nil {
-		t.Fatalf("Failed to unban peer")
+		t.Fatalf("Failed to unban pubkey")
 	}
 
 	err = g.IsAddrBanned(testIPV4Addr)
 	if err != nil {
-		t.Fatalf("Failed to unban peer")
+		t.Fatalf("Failed to unban v4 addr")
 	}
 
 	err = g.IsAddrBanned(testIPV6Addr)
 	if err != nil {
-		t.Fatalf("Failed to unban peer")
+		t.Fatalf("Failed to unban v6 addr")
 	}
 
 	err = g.IsAddrBanned(testOnionV2Addr)
 	if err != nil {
-		t.Fatalf("Failed to unban peer")
+		t.Fatalf("Failed to unban onion v2 addr")
 	}
 
 	err = g.IsAddrBanned(testOnionV3Addr)
 	if err != nil {
-		t.Fatalf("Failed to unban peer")
+		t.Fatalf("Failed to unban onion v3 addr")
+	}
+}
+
+// TODO(eugene) - TestGenericBanStorePersistentGC
+func TestGenericBanStorePersistentGC(t *testing.T) {
+	dbPath := tempBanStorePath(t)
+
+	g, err := startup(dbPath, gcInterval)
+	if err != nil {
+		t.Fatalf("Unable to startup GenericBanStore: %v", err)
+	}
+	defer shutdown(dbPath, g)
+
+	// Ban a pubkey and an address
+	err = g.BanPeer(testPubKey, banDuration, testIPV4Addr)
+	if err != nil {
+		t.Fatalf("Unable to ban peer: %v", err)
+	}
+
+	// Wait for database write
+	time.Sleep(time.Millisecond * 500)
+
+	// Check that both the pubkey and the address are still banned
+	err = g.IsNodeBanned(testPubKey)
+	if err != ErrPubKeyIsBanned {
+		t.Fatalf("Failed to ban pubkey")
+	}
+
+	err = g.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban v4 addr")
+	}
+
+	// Shut down the GenericBanStore and the garbage collector
+	g.Stop()
+
+	g2, err := startup(dbPath, gcInterval)
+	if err != nil {
+		t.Fatalf("Unable to startup GenericBanStore: %v", err)
+	}
+	defer shutdown(dbPath, g2)
+
+	// Check that both the pubkey and the address are still banned
+	err = g2.IsNodeBanned(testPubKey)
+	if err != ErrPubKeyIsBanned {
+		t.Fatalf("Failed to ban pubkey")
+	}
+
+	err = g2.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban v4 addr")
+	}
+
+	// Wait for GC to unban entries
+	time.Sleep(time.Second * 5)
+
+	// Assert that both the pubkey and the address are unbanned
+	err = g2.IsNodeBanned(testPubKey)
+	if err != nil {
+		t.Fatalf("Failed to unban pubkey")
+	}
+
+	err = g2.IsAddrBanned(testIPV4Addr)
+	if err != nil {
+		t.Fatalf("Failed to unban v4 addr")
+	}
+}
+
+// TODO(eugene) - TestGenericBanStoreStartAndStop
+func TestGenericBanStoreStartAndStop(t *testing.T) {
+	dbPath := tempBanStorePath(t)
+
+	g, err := startup(dbPath, gcInterval)
+	if err != nil {
+		t.Fatalf("Unable to startup GenericBanStore: %v", err)
+	}
+	defer shutdown(dbPath, g)
+
+	// Ban a pubkey and an address
+	err = g.BanPeer(testPubKey, banDuration, testIPV4Addr)
+	if err != nil {
+		t.Fatalf("Unable to ban peer: %v", err)
+	}
+
+	// Shut down the generic ban store and the garbage collector
+	g.Stop()
+
+	g2, err := startup(dbPath, gcInterval)
+	if err != nil {
+		t.Fatalf("Unable to startup GenericBanStore: %v", err)
+	}
+	defer shutdown(dbPath, g2)
+
+	// Check that both the pubkey and address are still banned.
+	err = g2.IsNodeBanned(testPubKey)
+	if err != ErrPubKeyIsBanned {
+		t.Fatalf("Failed to persist banned pubkey")
+	}
+
+	err = g2.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to persist banned v4 addr")
+	}
+}
+
+// TODO(eugene) - TestGenericBanStoreBanTimes
+func TestGenericBanStoreBanTimes(t *testing.T) {
+	dbPath := tempBanStorePath(t)
+
+	g, err := startup(dbPath, gcInterval)
+	if err != nil {
+		t.Fatalf("Unable to startup GenericBanStore: %v", err)
+	}
+	defer shutdown(dbPath, g)
+
+	// Ban a pubkey
+	err = g.BanPeer(testPubKey, banDuration)
+	if err != nil {
+		t.Fatalf("Unable to ban peer: %v", err)
+	}
+
+	// Ban an address with a longer ban duration (5 seconds)
+	err = g.BanPeer(nil, time.Second * 5, testIPV4Addr)
+	if err != nil {
+		t.Fatalf("Unable to ban peer: %v", err)
+	}
+
+	// Wait for database write
+	time.Sleep(time.Millisecond * 500)
+
+	// Check that both the pubkey and address are banned
+	err = g.IsNodeBanned(testPubKey)
+	if err != ErrPubKeyIsBanned {
+		t.Fatalf("Failed to ban pubkey")
+	}
+
+	err = g.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban v4 addr")
+	}
+
+	// Wait for GC to unban the pubkey
+	time.Sleep(time.Second * 2)
+
+	// Check that the pubkey is unbanned and the address is banned
+	err = g.IsNodeBanned(testPubKey)
+	if err != nil {
+		t.Fatalf("Failed to unban pubkey")
+	}
+
+	err = g.IsAddrBanned(testIPV4Addr)
+	if err != ErrAddrIsBanned {
+		t.Fatalf("Failed to ban v4 addr")
+	}
+
+	// Wait for GC to unban the address
+	time.Sleep(time.Second * 5)
+	err = g.IsAddrBanned(testIPV4Addr)
+	if err != nil {
+		t.Fatalf("Failed to unban v4 addr")
 	}
 }

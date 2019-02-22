@@ -2853,7 +2853,7 @@ func putLightningNode(nodeBucket *bbolt.Bucket, aliasBucket *bbolt.Bucket,
 	}
 
 	for _, address := range node.Addresses {
-		if err := serializeAddr(&b, address); err != nil {
+		if err := SerializeAddr(&b, address); err != nil {
 			return err
 		}
 	}

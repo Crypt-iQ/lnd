@@ -47,6 +47,15 @@ var (
 	// the cipher session exceeds the maximum allowed message payload.
 	ErrMaxMessageLengthExceeded = errors.New("the generated payload exceeds " +
 		"the max allowed message length of (2^16)-1")
+
+	// TODO(eugene) - comment
+	ErrInvalidHandshake = errors.New("received an invalid handshake version")
+
+	// TODO(eugene) - comment
+	ErrInvalidKey = errors.New("received an invalid public key")
+
+	// TODO(eugene) - comment
+	ErrBadStaticPubKey = errors.New("peer doesn't know our pub static key")
 )
 
 // TODO(roasbeef): free buffer pool?
@@ -476,9 +485,7 @@ func (b *Machine) RecvActOne(actOne [ActOneSize]byte) error {
 	// If the handshake version is unknown, then the handshake fails
 	// immediately.
 	if actOne[0] != HandshakeVersion {
-		return fmt.Errorf("Act One: invalid handshake version: %v, "+
-			"only %v is valid, msg=%x", actOne[0], HandshakeVersion,
-			actOne[:])
+		return ErrInvalidHandshake
 	}
 
 	copy(e[:], actOne[1:34])
@@ -487,7 +494,7 @@ func (b *Machine) RecvActOne(actOne [ActOneSize]byte) error {
 	// e
 	b.remoteEphemeral, err = btcec.ParsePubKey(e[:], btcec.S256())
 	if err != nil {
-		return err
+		return ErrInvalidKey
 	}
 	b.mixHash(b.remoteEphemeral.SerializeCompressed())
 
@@ -498,6 +505,10 @@ func (b *Machine) RecvActOne(actOne [ActOneSize]byte) error {
 	// If the initiator doesn't know our static key, then this operation
 	// will fail.
 	_, err = b.DecryptAndHash(p[:])
+	if err != nil {
+		err = ErrBadStaticPubKey
+	}
+
 	return err
 }
 

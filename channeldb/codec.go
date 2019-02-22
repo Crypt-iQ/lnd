@@ -178,7 +178,7 @@ func WriteElement(w io.Writer, element interface{}) error {
 		}
 
 	case net.Addr:
-		if err := serializeAddr(w, e); err != nil {
+		if err := SerializeAddr(w, e); err != nil {
 			return err
 		}
 
@@ -188,7 +188,7 @@ func WriteElement(w io.Writer, element interface{}) error {
 		}
 
 		for _, addr := range e {
-			if err := serializeAddr(w, addr); err != nil {
+			if err := SerializeAddr(w, addr); err != nil {
 				return err
 			}
 		}

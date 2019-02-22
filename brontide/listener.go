@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/lightningnetwork/lnd/channeldb"
 )
 
 // defaultHandshakes is the maximum number of handshakes that can be done in
@@ -24,6 +25,10 @@ type Listener struct {
 
 	tcp *net.TCPListener
 
+	banStore channeldb.BanStore
+
+	banChan chan<- *channeldb.BrontideOffense
+
 	handshakeSema chan struct{}
 	conns         chan maybeConn
 	quit          chan struct{}
@@ -34,8 +39,10 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener returns a new net.Listener which enforces the Brontide scheme
 // during both initial connection establishment and data transfer.
-func NewListener(localStatic *btcec.PrivateKey, listenAddr string) (*Listener,
-	error) {
+func NewListener(localStatic *btcec.PrivateKey, listenAddr string,
+	banStore channeldb.BanStore,
+	banChan chan<- *channeldb.BrontideOffense) (*Listener, error) {
+
 	addr, err := net.ResolveTCPAddr("tcp", listenAddr)
 	if err != nil {
 		return nil, err
@@ -49,6 +56,8 @@ func NewListener(localStatic *btcec.PrivateKey, listenAddr string) (*Listener,
 	brontideListener := &Listener{
 		localStatic:   localStatic,
 		tcp:           l,
+		banStore:      banStore,
+		banChan:       banChan,
 		handshakeSema: make(chan struct{}, defaultHandshakes),
 		conns:         make(chan maybeConn),
 		quit:          make(chan struct{}),
@@ -108,6 +117,17 @@ func (l *Listener) doHandshake(conn net.Conn) {
 
 	remoteAddr := conn.RemoteAddr().String()
 
+	// Check if the inbound peer's address is banned and if so, disconnect
+	if l.banStore != nil {
+		err := l.banStore.IsAddrBanned(conn.RemoteAddr())
+		if err == channeldb.ErrAddrIsBanned {
+			panic("hello")
+			conn.Close()
+			l.rejectConn(rejectedConnErr(err, remoteAddr))
+			return
+		}
+	}
+
 	brontideConn := &Conn{
 		conn:  conn,
 		noise: NewBrontideMachine(false, l.localStatic, nil),
@@ -123,11 +143,15 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	// this portion will fail with a non-nil error.
 	var actOne [ActOneSize]byte
 	if _, err := io.ReadFull(conn, actOne[:]); err != nil {
+		// TODO(eugene) - send to banChan?
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
 	}
 	if err := brontideConn.noise.RecvActOne(actOne); err != nil {
+		if l.banChan != nil {
+			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
@@ -163,14 +187,29 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	// sides have mutually authenticated each other.
 	var actThree [ActThreeSize]byte
 	if _, err := io.ReadFull(conn, actThree[:]); err != nil {
+		// TODO(eugene) - send to banChan?
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
 	}
 	if err := brontideConn.noise.RecvActThree(actThree); err != nil {
+		// Send to banChan
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
+	}
+
+	// TODO - What if the node was JUST banned?
+
+	// Check if the remote node's public static key is banned and if so,
+	// disconnect
+	if l.banStore != nil {
+		err = l.banStore.IsNodeBanned(brontideConn.noise.remoteStatic)
+		if err == channeldb.ErrPubKeyIsBanned {
+			brontideConn.conn.Close()
+			l.rejectConn(rejectedConnErr(err, remoteAddr))
+			return
+		}
 	}
 
 	// We'll reset the deadline as it's no longer critical beyond the

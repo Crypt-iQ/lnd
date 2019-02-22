@@ -54,6 +54,15 @@ type BanStore interface {
 	UnbanAddr(addr net.Addr) error
 	IsNodeBanned(pubkey *btcec.PublicKey) error
 	IsAddrBanned(addr net.Addr) error
+	Start() error // TODO(eugene) - needed?
+	Stop() error // TODO(eugene) - needed?
+}
+
+// TODO(eugene) - BrontideOffense comment
+type BrontideOffense struct {
+	Err    error
+	Pubkey *btcec.PublicKey
+	Addr   net.Addr
 }
 
 // TODO(eugene) - GenericBanStore comment
@@ -315,12 +324,16 @@ func (g *GenericBanStore) BanPeer(pubkey *btcec.PublicKey,
 		// Ban all of the addresses.
 		for _, addr := range addrs {
 			// Serialize the current address
-			if err := serializeAddr(&b, addr); err != nil {
+			if err := SerializeAddr(&b, addr); err != nil {
 				return err
 			}
 
+			// Chop off the last two bytes because we don't need the port.
+			bytesLen := len(b.Bytes())
+			addrBytes := b.Bytes()[:bytesLen - 2]
+
 			// Ban this address.
-			err := bannedAddrs.Put(b.Bytes(), expiryBytes[:])
+			err := bannedAddrs.Put(addrBytes, expiryBytes[:])
 			if err != nil {
 				return err
 			}
@@ -369,12 +382,16 @@ func (g *GenericBanStore) UnbanAddr(addr net.Addr) error {
 		var b bytes.Buffer
 
 		// Serialize the address
-		if err := serializeAddr(&b, addr); err != nil {
+		if err := SerializeAddr(&b, addr); err != nil {
 			return err
 		}
 
+		// Chop off the last two bytes because we don't need the port.
+		bytesLen := len(b.Bytes())
+		addrBytes := b.Bytes()[:bytesLen - 2]
+
 		// Delete the serialized net.Addr
-		return bannedAddrs.Delete(b.Bytes())
+		return bannedAddrs.Delete(addrBytes)
 	})
 }
 
@@ -419,11 +436,15 @@ func (g *GenericBanStore) IsAddrBanned(addr net.Addr) error {
 		var b bytes.Buffer
 
 		// Serialize the address
-		if err := serializeAddr(&b, addr); err != nil {
+		if err := SerializeAddr(&b, addr); err != nil {
 			return err
 		}
 
-		bannedTime := bannedAddrs.Get(b.Bytes())
+		// Chop off the last two bytes because we don't need the port.
+		bytesLen := len(b.Bytes())
+		addrBytes := b.Bytes()[:bytesLen - 2]
+
+		bannedTime := bannedAddrs.Get(addrBytes)
 		if bannedTime == nil {
 			return nil
 		}

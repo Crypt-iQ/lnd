@@ -263,7 +263,7 @@ func serializeLinkNode(w io.Writer, l *LinkNode) error {
 	}
 
 	for _, addr := range l.Addresses {
-		if err := serializeAddr(w, addr); err != nil {
+		if err := SerializeAddr(w, addr); err != nil {
 			return err
 		}
 	}

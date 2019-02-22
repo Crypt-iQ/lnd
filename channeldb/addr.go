@@ -207,9 +207,9 @@ func deserializeAddr(r io.Reader) (net.Addr, error) {
 	return address, nil
 }
 
-// serializeAddr serializes an address into its raw bytes representation so that
+// SerializeAddr serializes an address into its raw bytes representation so that
 // it can be deserialized without requiring address resolution.
-func serializeAddr(w io.Writer, address net.Addr) error {
+func SerializeAddr(w io.Writer, address net.Addr) error {
 	switch addr := address.(type) {
 	case *net.TCPAddr:
 		return encodeTCPAddr(w, addr)

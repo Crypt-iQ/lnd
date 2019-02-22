@@ -170,6 +170,11 @@ type server struct {
 
 	writeBufferPool *lnpeer.WriteBufferPool
 
+	// TODO(eugene) - comment
+	banStore      channeldb.BanStore
+	offenders     map[string]*connmgr.DynamicBanScore
+	brontideChans map[net.Addr]<-chan *channeldb.BrontideOffense
+
 	// globalFeatures feature vector which affects HTLCs and thus are also
 	// advertised to other nodes.
 	globalFeatures *lnwire.FeatureVector
@@ -241,14 +246,32 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 
 	var err error
 
+	// Initialize the generic ban store, which will store the set of banned
+	// peers.
+	graphDir := chanDB.Path()
+	banStorePath := filepath.Join(graphDir, "genericbanstore.db")
+	banStore := channeldb.NewGenericBanStore(banStorePath, time.Second)
+
+	// Initialize the offenders and brontideChans maps
+	offenders := make(map[string]*connmgr.DynamicBanScore)
+	brontideChans := make(map[net.Addr]<-chan *channeldb.BrontideOffense)
+
 	listeners := make([]net.Listener, len(listenAddrs))
 	for i, listenAddr := range listenAddrs {
+		// Create the chan that the listener will send errors over so that
+		// the server can ban offenders
+		banChan := make(chan *channeldb.BrontideOffense)
+
 		// Note: though brontide.NewListener uses ResolveTCPAddr, it
 		// doesn't need to call the general lndResolveTCP function
 		// since we are resolving a local address.
 		listeners[i], err = brontide.NewListener(
-			privKey, listenAddr.String(),
+			privKey, listenAddr.String(), banStore, banChan,
 		)
+
+		// Add this listener to the map
+		brontideChans[listenAddr] = banChan
+
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +284,6 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 
 	// Initialize the sphinx router, placing it's persistent replay log in
 	// the same directory as the channel graph database.
-	graphDir := chanDB.Path()
 	sharedSecretPath := filepath.Join(graphDir, "sphinxreplay.db")
 	replayLog := htlcswitch.NewDecayedLog(sharedSecretPath, cc.chainNotifier)
 	sphinxRouter := sphinx.NewRouter(privKey, activeNetParams.Params, replayLog)
@@ -301,6 +323,11 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		peerConnectedListeners:    make(map[string][]chan<- lnpeer.Peer),
 		peerDisconnectedListeners: make(map[string][]chan<- struct{}),
 		sentDisabled:              make(map[wire.OutPoint]bool),
+
+		// TODO(eugene) - Change to have differing levels of bans
+		banStore:      banStore,
+		offenders:     offenders,
+		brontideChans: brontideChans,
 
 		globalFeatures: lnwire.NewFeatureVector(globalFeatures,
 			lnwire.GlobalFeatures),
@@ -1030,6 +1057,13 @@ func (s *server) Start() error {
 	if err := s.invoices.Start(); err != nil {
 		return err
 	}
+	if err := s.banStore.Start(); err != nil {
+		return err
+	}
+
+	// Start a goroutine that will ban offending peers
+	s.wg.Add(1)
+	go s.handleBrontideOffenses()
 
 	// With all the relevant sub-systems started, we'll now attempt to
 	// establish persistent connections to our direct channel collaborators
@@ -1102,6 +1136,7 @@ func (s *server) Stop() error {
 	s.cc.feeEstimator.Stop()
 	s.invoices.Stop()
 	s.fundingMgr.Stop()
+	s.banStore.Stop()
 
 	// Disconnect from each active peers to ensure that
 	// peerTerminationWatchers signal completion to each peer.
@@ -3290,6 +3325,117 @@ func (s *server) watchChannelStatus() {
 
 		case <-s.quit:
 			return
+		}
+	}
+}
+
+// TODO(eugene) - comment
+// MUST be run as goroutine
+func (s *server) handleBrontideOffenses() {
+	defer s.wg.Done()
+
+	// TODO - If a peer gets banned, do we delete from our map?
+
+	// Keep in mind about mutexes
+	for {
+		// Loop through all brontide listener chans and check to see if there
+		// are any updates
+		for _, banChan := range s.brontideChans {
+			select {
+			case offense := <-banChan:
+				var persistent uint32
+				var transient uint32
+
+				// Switch on the error to determine the penalty
+				switch offense.Err {
+				case brontide.ErrInvalidHandshake:
+					persistent = 10
+					transient = 20
+				case brontide.ErrInvalidKey:
+					persistent = 20
+					transient = 40
+				case brontide.ErrBadStaticPubKey:
+					persistent = 50
+					transient = 100
+				}
+
+				var pubkeyString string
+				var addrString string
+
+				if offense.Pubkey != nil {
+					// Get the key for the offenders map for this pubkey
+					pubkeyString = string(offense.Pubkey.SerializeCompressed())
+
+					// Determine if the key exists in the offenders map
+					dynBanScore, ok := s.offenders[pubkeyString]
+					if ok {
+						// Increase the ban score
+						dynBanScore.Increase(persistent, transient)
+					} else {
+						// If the key doesn't exist in the offenders map, create
+						// a new DynamicBanScore and increase its score
+						dynBanScore = &connmgr.DynamicBanScore{}
+						dynBanScore.Increase(persistent, transient)
+						s.offenders[pubkeyString] = dynBanScore
+					}
+
+					// Check if the newly increased ban score is above the
+					// specified ban threshold
+					// TODO(eugene) - low, medium, high
+					if dynBanScore.Int() >= 200 {
+						// TODO(eugene) - error necessary?
+						err := s.banStore.BanPeer(offense.Pubkey, time.Hour)
+						if err != nil {
+							return
+						}
+					}
+				}
+
+				// TODO(eugene) - Strip port
+				if offense.Addr != nil {
+					var b bytes.Buffer
+
+					// Serialize the address
+					if err := channeldb.SerializeAddr(&b, offense.Addr); err != nil {
+						return
+					}
+
+					// Chop off the last two bytes because we don't need the port.
+					bytesLen := len(b.Bytes())
+					addrBytes := b.Bytes()[:bytesLen - 2]
+
+					// Get the key for the offenders map for this address
+					addrString = string(addrBytes)
+
+					// Determine if the key exists in the offenders map
+					dynBanScore, ok := s.offenders[addrString]
+					if ok {
+						// Increase the ban score
+						dynBanScore.Increase(persistent, transient)
+					} else {
+						// If the key doesn't exist in the offenders map, create
+						// a new DynamicBanScore and increase its score
+						dynBanScore = &connmgr.DynamicBanScore{}
+						dynBanScore.Increase(persistent, transient)
+						s.offenders[addrString] = dynBanScore
+					}
+
+					// Check if the newly increased ban score is above the
+					// specified ban threshold
+					// TODO(eugene) - low, medium, high
+					if dynBanScore.Int() >= 200 {
+						// TODO(eugene) - error necessary?
+						err := s.banStore.BanPeer(nil, time.Hour, offense.Addr)
+						if err != nil {
+							return
+						}
+					}
+				}
+			case <-s.quit:
+				// Received shutdown request
+				return
+			default:
+			}
 		}
 	}
 }

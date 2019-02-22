@@ -117,7 +117,7 @@ func TestAddrSerialization(t *testing.T) {
 
 	var b bytes.Buffer
 	for _, test := range addrTests {
-		err := serializeAddr(&b, test.expAddr)
+		err := SerializeAddr(&b, test.expAddr)
 		switch {
 		case err == nil && test.serErr != "":
 			t.Fatalf("expected serialization err for addr %v",

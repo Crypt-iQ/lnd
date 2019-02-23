@@ -42,6 +42,8 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 		return nil, err
 	}
 
+	// TODO - We have a public key and an address here
+
 	b := &Conn{
 		conn:  conn,
 		noise: NewBrontideMachine(true, localPriv, netAddr.IdentityKey),

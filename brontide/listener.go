@@ -121,7 +121,6 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	if l.banStore != nil {
 		err := l.banStore.IsAddrBanned(conn.RemoteAddr())
 		if err == channeldb.ErrAddrIsBanned {
-			panic("hello")
 			conn.Close()
 			l.rejectConn(rejectedConnErr(err, remoteAddr))
 			return
@@ -143,7 +142,9 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	// this portion will fail with a non-nil error.
 	var actOne [ActOneSize]byte
 	if _, err := io.ReadFull(conn, actOne[:]); err != nil {
-		// TODO(eugene) - send to banChan?
+		if l.banChan != nil {
+			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
@@ -187,19 +188,19 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	// sides have mutually authenticated each other.
 	var actThree [ActThreeSize]byte
 	if _, err := io.ReadFull(conn, actThree[:]); err != nil {
-		// TODO(eugene) - send to banChan?
+		if l.banChan != nil {
+			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
 	}
 	if err := brontideConn.noise.RecvActThree(actThree); err != nil {
-		// Send to banChan
+		// TODO - Send to banChan (pubkey?)
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return
 	}
-
-	// TODO - What if the node was JUST banned?
 
 	// Check if the remote node's public static key is banned and if so,
 	// disconnect

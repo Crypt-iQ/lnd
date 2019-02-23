@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image/color"
+	"io"
 	"math/big"
 	"net"
 	"path/filepath"
@@ -324,7 +325,6 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		peerDisconnectedListeners: make(map[string][]chan<- struct{}),
 		sentDisabled:              make(map[wire.OutPoint]bool),
 
-		// TODO(eugene) - Change to have differing levels of bans
 		banStore:      banStore,
 		offenders:     offenders,
 		brontideChans: brontideChans,
@@ -3334,9 +3334,6 @@ func (s *server) watchChannelStatus() {
 func (s *server) handleBrontideOffenses() {
 	defer s.wg.Done()
 
-	// TODO - If a peer gets banned, do we delete from our map?
-
-	// Keep in mind about mutexes
 	for {
 		// Loop through all brontide listener chans and check to see if there
 		// are any updates
@@ -3348,15 +3345,31 @@ func (s *server) handleBrontideOffenses() {
 
 				// Switch on the error to determine the penalty
 				switch offense.Err {
-				case brontide.ErrInvalidHandshake:
+				case io.EOF:
 					persistent = 10
 					transient = 20
+				case io.ErrUnexpectedEOF:
+					persistent = 10
+					transient = 20
+				case brontide.ErrInvalidHandshake:
+					persistent = 15
+					transient = 30
 				case brontide.ErrInvalidKey:
 					persistent = 20
 					transient = 40
 				case brontide.ErrBadStaticPubKey:
 					persistent = 50
 					transient = 100
+				default:
+					// See if this error was due to a read/write timeout
+					if err, ok := offense.Err.(net.Error); ok && err.Timeout() {
+						persistent = 50
+						transient = 100
+					} else {
+						// Otherwise, an offending error did not occur and
+						// we can continue.
+						continue
+					}
 				}
 
 				var pubkeyString string
@@ -3381,9 +3394,7 @@ func (s *server) handleBrontideOffenses() {
 
 					// Check if the newly increased ban score is above the
 					// specified ban threshold
-					// TODO(eugene) - low, medium, high
 					if dynBanScore.Int() >= 200 {
-						// TODO(eugene) - error necessary?
 						err := s.banStore.BanPeer(offense.Pubkey, time.Hour)
 						if err != nil {
 							return
@@ -3391,7 +3402,6 @@ func (s *server) handleBrontideOffenses() {
 					}
 				}
 
-				// TODO(eugene) - Strip port
 				if offense.Addr != nil {
 					var b bytes.Buffer
 
@@ -3422,9 +3432,7 @@ func (s *server) handleBrontideOffenses() {
 
 					// Check if the newly increased ban score is above the
 					// specified ban threshold
-					// TODO(eugene) - low, medium, high
 					if dynBanScore.Int() >= 200 {
-						// TODO(eugene) - error necessary?
 						err := s.banStore.BanPeer(nil, time.Hour, offense.Addr)
 						if err != nil {
 							return

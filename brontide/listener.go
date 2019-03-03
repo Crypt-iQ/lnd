@@ -196,7 +196,9 @@ func (l *Listener) doHandshake(conn net.Conn) {
 		return
 	}
 	if err := brontideConn.noise.RecvActThree(actThree); err != nil {
-		// TODO - Send to banChan (pubkey?)
+		if l.banChan != nil {
+			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
 		return

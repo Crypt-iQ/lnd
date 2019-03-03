@@ -175,6 +175,7 @@ type server struct {
 	banStore      channeldb.BanStore
 	offenders     map[string]*connmgr.DynamicBanScore
 	brontideChans map[net.Addr]<-chan *channeldb.BrontideOffense
+	brontideMtx   sync.RWMutex
 
 	// globalFeatures feature vector which affects HTLCs and thus are also
 	// advertised to other nodes.
@@ -3335,6 +3336,10 @@ func (s *server) handleBrontideOffenses() {
 	defer s.wg.Done()
 
 	for {
+		// Acquire the lock so that new connections must wait to add to the
+		// brontideChans map.
+		s.brontideMtx.RLock()
+
 		// Loop through all brontide listener chans and check to see if there
 		// are any updates
 		for _, banChan := range s.brontideChans {
@@ -3397,6 +3402,7 @@ func (s *server) handleBrontideOffenses() {
 					if dynBanScore.Int() >= 200 {
 						err := s.banStore.BanPeer(offense.Pubkey, time.Hour)
 						if err != nil {
+							s.brontideMtx.RUnlock()
 							return
 						}
 					}
@@ -3406,7 +3412,9 @@ func (s *server) handleBrontideOffenses() {
 					var b bytes.Buffer
 
 					// Serialize the address
-					if err := channeldb.SerializeAddr(&b, offense.Addr); err != nil {
+					err := channeldb.SerializeAddr(&b, offense.Addr)
+					if err != nil {
+						s.brontideMtx.RUnlock()
 						return
 					}
 
@@ -3435,6 +3443,7 @@ func (s *server) handleBrontideOffenses() {
 					if dynBanScore.Int() >= 200 {
 						err := s.banStore.BanPeer(nil, time.Hour, offense.Addr)
 						if err != nil {
+							s.brontideMtx.RUnlock()
 							return
 						}
 					}
@@ -3445,5 +3454,7 @@ func (s *server) handleBrontideOffenses() {
 			default:
 			}
 		}
+
+		s.brontideMtx.RUnlock()
 	}
 }

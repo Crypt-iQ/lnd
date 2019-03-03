@@ -56,6 +56,9 @@ var (
 
 	// TODO(eugene) - comment
 	ErrBadStaticPubKey = errors.New("peer doesn't know our pub static key")
+
+	// TODO(eugene) - comment
+	ErrDecryptionFailed = errors.New("failed to decrypt payload")
 )
 
 // TODO(roasbeef): free buffer pool?
@@ -559,9 +562,7 @@ func (b *Machine) RecvActTwo(actTwo [ActTwoSize]byte) error {
 	// If the handshake version is unknown, then the handshake fails
 	// immediately.
 	if actTwo[0] != HandshakeVersion {
-		return fmt.Errorf("Act Two: invalid handshake version: %v, "+
-			"only %v is valid, msg=%x", actTwo[0], HandshakeVersion,
-			actTwo[:])
+		return ErrInvalidHandshake
 	}
 
 	copy(e[:], actTwo[1:34])
@@ -570,7 +571,7 @@ func (b *Machine) RecvActTwo(actTwo [ActTwoSize]byte) error {
 	// e
 	b.remoteEphemeral, err = btcec.ParsePubKey(e[:], btcec.S256())
 	if err != nil {
-		return err
+		return ErrInvalidKey
 	}
 	b.mixHash(b.remoteEphemeral.SerializeCompressed())
 
@@ -579,6 +580,7 @@ func (b *Machine) RecvActTwo(actTwo [ActTwoSize]byte) error {
 	b.mixKey(s)
 
 	_, err = b.DecryptAndHash(p[:])
+	// TODO - Invalid MAC
 	return err
 }
 
@@ -625,9 +627,7 @@ func (b *Machine) RecvActThree(actThree [ActThreeSize]byte) error {
 	// If the handshake version is unknown, then the handshake fails
 	// immediately.
 	if actThree[0] != HandshakeVersion {
-		return fmt.Errorf("Act Three: invalid handshake version: %v, "+
-			"only %v is valid, msg=%x", actThree[0], HandshakeVersion,
-			actThree[:])
+		return ErrInvalidHandshake
 	}
 
 	copy(s[:], actThree[1:33+16+1])
@@ -636,11 +636,12 @@ func (b *Machine) RecvActThree(actThree [ActThreeSize]byte) error {
 	// s
 	remotePub, err := b.DecryptAndHash(s[:])
 	if err != nil {
+		// TODO - ???
 		return err
 	}
 	b.remoteStatic, err = btcec.ParsePubKey(remotePub, btcec.S256())
 	if err != nil {
-		return err
+		return ErrInvalidKey
 	}
 
 	// se
@@ -648,6 +649,7 @@ func (b *Machine) RecvActThree(actThree [ActThreeSize]byte) error {
 	b.mixKey(se)
 
 	if _, err := b.DecryptAndHash(p[:]); err != nil {
+		// TODO - Invalid MAC
 		return err
 	}
 

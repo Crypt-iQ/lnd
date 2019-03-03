@@ -2,6 +2,7 @@ package brontide
 
 import (
 	"bytes"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"io"
 	"math"
 	"net"
@@ -23,6 +24,10 @@ type Conn struct {
 	noise *Machine
 
 	readBuf bytes.Buffer
+
+	banStore channeldb.BanStore
+
+	banChan chan<- *channeldb.BrontideOffense
 }
 
 // A compile-time assertion to ensure that Conn meets the net.Conn interface.
@@ -33,7 +38,23 @@ var _ net.Conn = (*Conn)(nil)
 // public key. In the case of a handshake failure, the connection is closed and
 // a non-nil error is returned.
 func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
+	banStore channeldb.BanStore, banChan chan<- *channeldb.BrontideOffense,
 	dialer func(string, string) (net.Conn, error)) (*Conn, error) {
+
+	// Check if the remote peer's address or pubkey is banned and if so,
+	// don't begin the brontide handshake.
+	if banStore != nil {
+		err := banStore.IsAddrBanned(netAddr.Address)
+		if err == channeldb.ErrAddrIsBanned {
+			return nil, err
+		}
+
+		err = banStore.IsNodeBanned(netAddr.IdentityKey)
+		if err == channeldb.ErrPubKeyIsBanned {
+			return nil, err
+		}
+	}
+
 	ipAddr := netAddr.Address.String()
 	var conn net.Conn
 	var err error
@@ -42,11 +63,11 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 		return nil, err
 	}
 
-	// TODO - We have a public key and an address here
-
 	b := &Conn{
-		conn:  conn,
-		noise: NewBrontideMachine(true, localPriv, netAddr.IdentityKey),
+		conn:     conn,
+		noise:    NewBrontideMachine(true, localPriv, netAddr.IdentityKey),
+		banStore: banStore,
+		banChan:  banChan,
 	}
 
 	// Initiate the handshake by sending the first act to the receiver.
@@ -71,10 +92,18 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 	// secrecy.
 	var actTwo [ActTwoSize]byte
 	if _, err := io.ReadFull(conn, actTwo[:]); err != nil {
+		if b.banChan != nil {
+			// TODO - Length?
+			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
+		}
 		b.conn.Close()
 		return nil, err
 	}
 	if err := b.noise.RecvActTwo(actTwo); err != nil {
+		if b.banChan != nil {
+			// TODO - Length?
+			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
+		}
 		b.conn.Close()
 		return nil, err
 	}

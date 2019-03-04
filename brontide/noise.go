@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"time"
@@ -580,7 +579,10 @@ func (b *Machine) RecvActTwo(actTwo [ActTwoSize]byte) error {
 	b.mixKey(s)
 
 	_, err = b.DecryptAndHash(p[:])
-	// TODO - Invalid MAC
+	if err != nil {
+		err = ErrDecryptionFailed
+	}
+
 	return err
 }
 
@@ -636,8 +638,7 @@ func (b *Machine) RecvActThree(actThree [ActThreeSize]byte) error {
 	// s
 	remotePub, err := b.DecryptAndHash(s[:])
 	if err != nil {
-		// TODO - ???
-		return err
+		return ErrDecryptionFailed
 	}
 	b.remoteStatic, err = btcec.ParsePubKey(remotePub, btcec.S256())
 	if err != nil {
@@ -649,8 +650,7 @@ func (b *Machine) RecvActThree(actThree [ActThreeSize]byte) error {
 	b.mixKey(se)
 
 	if _, err := b.DecryptAndHash(p[:]); err != nil {
-		// TODO - Invalid MAC
-		return err
+		return ErrDecryptionFailed
 	}
 
 	// With the final ECDH operation complete, derive the session sending

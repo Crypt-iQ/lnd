@@ -93,7 +93,6 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 	var actTwo [ActTwoSize]byte
 	if _, err := io.ReadFull(conn, actTwo[:]); err != nil {
 		if b.banChan != nil {
-			// TODO - Length?
 			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
 		}
 		b.conn.Close()
@@ -101,7 +100,6 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 	}
 	if err := b.noise.RecvActTwo(actTwo); err != nil {
 		if b.banChan != nil {
-			// TODO - Length?
 			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
 		}
 		b.conn.Close()

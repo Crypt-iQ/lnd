@@ -172,10 +172,7 @@ type server struct {
 	writeBufferPool *lnpeer.WriteBufferPool
 
 	// TODO(eugene) - comment
-	banStore      channeldb.BanStore
-	offenders     map[string]*connmgr.DynamicBanScore
-	brontideChans map[net.Addr]<-chan *channeldb.BrontideOffense
-	brontideMtx   sync.RWMutex
+	banKit *banKit
 
 	// globalFeatures feature vector which affects HTLCs and thus are also
 	// advertised to other nodes.
@@ -194,6 +191,14 @@ type server struct {
 	quit chan struct{}
 
 	wg sync.WaitGroup
+}
+
+type banKit struct {
+	// TODO(eugene) - comment
+	banStore      channeldb.BanStore
+	offenders     map[string]*connmgr.DynamicBanScore
+	brontideChans map[net.Addr]<-chan *channeldb.BrontideOffense
+	brontideMtx   sync.RWMutex
 }
 
 // parseAddr parses an address from its string format to a net.Addr.
@@ -234,10 +239,20 @@ func parseAddr(address string) (net.Addr, error) {
 
 // noiseDial is a factory function which creates a connmgr compliant dialing
 // function by returning a closure which includes the server's identity key.
-func noiseDial(idPriv *btcec.PrivateKey) func(net.Addr) (net.Conn, error) {
+func noiseDial(idPriv *btcec.PrivateKey, banKit *banKit) func(net.Addr) (net.Conn, error) {
 	return func(a net.Addr) (net.Conn, error) {
 		lnAddr := a.(*lnwire.NetAddress)
-		return brontide.Dial(idPriv, lnAddr, cfg.net.Dial)
+
+		// Create the chan that the connection will send errors over so that
+		// the server can ban offenders
+		banChan := make(chan *channeldb.BrontideOffense)
+
+		// Add the remote peer and chan to the map
+		banKit.brontideMtx.Lock()
+		banKit.brontideChans[a] = banChan
+		banKit.brontideMtx.Unlock()
+
+		return brontide.Dial(idPriv, lnAddr, banKit.banStore, banChan, cfg.net.Dial)
 	}
 }
 
@@ -326,13 +341,15 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		peerDisconnectedListeners: make(map[string][]chan<- struct{}),
 		sentDisabled:              make(map[wire.OutPoint]bool),
 
-		banStore:      banStore,
-		offenders:     offenders,
-		brontideChans: brontideChans,
-
 		globalFeatures: lnwire.NewFeatureVector(globalFeatures,
 			lnwire.GlobalFeatures),
 		quit: make(chan struct{}),
+	}
+
+	s.banKit = &banKit{
+		banStore:      banStore,
+		offenders:     offenders,
+		brontideChans: brontideChans,
 	}
 
 	s.witnessBeacon = &preimageBeacon{
@@ -975,7 +992,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		OnAccept:       s.InboundPeerConnected,
 		RetryDuration:  time.Second * 5,
 		TargetOutbound: 100,
-		Dial:           noiseDial(s.identityPriv),
+		Dial:           noiseDial(s.identityPriv, s.banKit),
 		OnConnection:   s.OutboundPeerConnected,
 	})
 	if err != nil {
@@ -1058,7 +1075,7 @@ func (s *server) Start() error {
 	if err := s.invoices.Start(); err != nil {
 		return err
 	}
-	if err := s.banStore.Start(); err != nil {
+	if err := s.banKit.banStore.Start(); err != nil {
 		return err
 	}
 
@@ -1137,7 +1154,7 @@ func (s *server) Stop() error {
 	s.cc.feeEstimator.Stop()
 	s.invoices.Stop()
 	s.fundingMgr.Stop()
-	s.banStore.Stop()
+	s.banKit.banStore.Stop()
 
 	// Disconnect from each active peers to ensure that
 	// peerTerminationWatchers signal completion to each peer.
@@ -2854,7 +2871,16 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 // notify the caller if the connection attempt has failed. Otherwise, it will be
 // closed.
 func (s *server) connectToPeer(addr *lnwire.NetAddress, errChan chan<- error) {
-	conn, err := brontide.Dial(s.identityPriv, addr, cfg.net.Dial)
+	// Create the chan that the connection will send errors over so that the
+	// server can ban offenders
+	banChan := make(chan *channeldb.BrontideOffense)
+
+	// Add the remote peer and chan to the map
+	s.banKit.brontideMtx.Lock()
+	s.banKit.brontideChans[addr.Address] = banChan
+	s.banKit.brontideMtx.Unlock()
+
+	conn, err := brontide.Dial(s.identityPriv, addr, s.banKit.banStore, banChan, cfg.net.Dial)
 	if err != nil {
 		srvrLog.Errorf("Unable to connect to %v: %v", addr, err)
 		select {
@@ -3338,11 +3364,11 @@ func (s *server) handleBrontideOffenses() {
 	for {
 		// Acquire the lock so that new connections must wait to add to the
 		// brontideChans map.
-		s.brontideMtx.RLock()
+		s.banKit.brontideMtx.RLock()
 
 		// Loop through all brontide listener chans and check to see if there
 		// are any updates
-		for _, banChan := range s.brontideChans {
+		for _, banChan := range s.banKit.brontideChans {
 			select {
 			case offense := <-banChan:
 				var persistent uint32
@@ -3365,6 +3391,9 @@ func (s *server) handleBrontideOffenses() {
 				case brontide.ErrBadStaticPubKey:
 					persistent = 50
 					transient = 100
+				case brontide.ErrDecryptionFailed:
+					persistent = 35
+					transient = 70
 				default:
 					// See if this error was due to a read/write timeout
 					if err, ok := offense.Err.(net.Error); ok && err.Timeout() {
@@ -3385,7 +3414,7 @@ func (s *server) handleBrontideOffenses() {
 					pubkeyString = string(offense.Pubkey.SerializeCompressed())
 
 					// Determine if the key exists in the offenders map
-					dynBanScore, ok := s.offenders[pubkeyString]
+					dynBanScore, ok := s.banKit.offenders[pubkeyString]
 					if ok {
 						// Increase the ban score
 						dynBanScore.Increase(persistent, transient)
@@ -3394,15 +3423,15 @@ func (s *server) handleBrontideOffenses() {
 						// a new DynamicBanScore and increase its score
 						dynBanScore = &connmgr.DynamicBanScore{}
 						dynBanScore.Increase(persistent, transient)
-						s.offenders[pubkeyString] = dynBanScore
+						s.banKit.offenders[pubkeyString] = dynBanScore
 					}
 
 					// Check if the newly increased ban score is above the
 					// specified ban threshold
 					if dynBanScore.Int() >= 200 {
-						err := s.banStore.BanPeer(offense.Pubkey, time.Hour)
+						err := s.banKit.banStore.BanPeer(offense.Pubkey, time.Hour)
 						if err != nil {
-							s.brontideMtx.RUnlock()
+							s.banKit.brontideMtx.RUnlock()
 							return
 						}
 					}
@@ -3414,7 +3443,7 @@ func (s *server) handleBrontideOffenses() {
 					// Serialize the address
 					err := channeldb.SerializeAddr(&b, offense.Addr)
 					if err != nil {
-						s.brontideMtx.RUnlock()
+						s.banKit.brontideMtx.RUnlock()
 						return
 					}
 
@@ -3426,7 +3455,7 @@ func (s *server) handleBrontideOffenses() {
 					addrString = string(addrBytes)
 
 					// Determine if the key exists in the offenders map
-					dynBanScore, ok := s.offenders[addrString]
+					dynBanScore, ok := s.banKit.offenders[addrString]
 					if ok {
 						// Increase the ban score
 						dynBanScore.Increase(persistent, transient)
@@ -3435,15 +3464,15 @@ func (s *server) handleBrontideOffenses() {
 						// a new DynamicBanScore and increase its score
 						dynBanScore = &connmgr.DynamicBanScore{}
 						dynBanScore.Increase(persistent, transient)
-						s.offenders[addrString] = dynBanScore
+						s.banKit.offenders[addrString] = dynBanScore
 					}
 
 					// Check if the newly increased ban score is above the
 					// specified ban threshold
 					if dynBanScore.Int() >= 200 {
-						err := s.banStore.BanPeer(nil, time.Hour, offense.Addr)
+						err := s.banKit.banStore.BanPeer(nil, time.Hour, offense.Addr)
 						if err != nil {
-							s.brontideMtx.RUnlock()
+							s.banKit.brontideMtx.RUnlock()
 							return
 						}
 					}
@@ -3455,6 +3484,6 @@ func (s *server) handleBrontideOffenses() {
 			}
 		}
 
-		s.brontideMtx.RUnlock()
+		s.banKit.brontideMtx.RUnlock()
 	}
 }

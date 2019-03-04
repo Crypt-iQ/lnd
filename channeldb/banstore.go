@@ -59,6 +59,7 @@ type BanStore interface {
 }
 
 // TODO(eugene) - BrontideOffense comment
+// TODO(eugene) - Rename to Offense and move to server.go
 type BrontideOffense struct {
 	Err    error
 	Pubkey *btcec.PublicKey

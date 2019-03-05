@@ -2,13 +2,13 @@ package brontide
 
 import (
 	"bytes"
-	"github.com/lightningnetwork/lnd/channeldb"
 	"io"
 	"math"
 	"net"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
@@ -24,10 +24,6 @@ type Conn struct {
 	noise *Machine
 
 	readBuf bytes.Buffer
-
-	banStore channeldb.BanStore
-
-	banChan chan<- *channeldb.BrontideOffense
 }
 
 // A compile-time assertion to ensure that Conn meets the net.Conn interface.
@@ -38,7 +34,7 @@ var _ net.Conn = (*Conn)(nil)
 // public key. In the case of a handshake failure, the connection is closed and
 // a non-nil error is returned.
 func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
-	banStore channeldb.BanStore, banChan chan<- *channeldb.BrontideOffense,
+	banStore channeldb.BanStore, banChan chan<- *channeldb.Offense,
 	dialer func(string, string) (net.Conn, error)) (*Conn, error) {
 
 	// Check if the remote peer's address or pubkey is banned and if so,
@@ -66,8 +62,6 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 	b := &Conn{
 		conn:     conn,
 		noise:    NewBrontideMachine(true, localPriv, netAddr.IdentityKey),
-		banStore: banStore,
-		banChan:  banChan,
 	}
 
 	// Initiate the handshake by sending the first act to the receiver.
@@ -92,15 +86,15 @@ func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
 	// secrecy.
 	var actTwo [ActTwoSize]byte
 	if _, err := io.ReadFull(conn, actTwo[:]); err != nil {
-		if b.banChan != nil {
-			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
+		if banChan != nil {
+			banChan <- &channeldb.Offense{err, b.noise.remoteStatic, b.conn.RemoteAddr(), channeldb.BrontideConn}
 		}
 		b.conn.Close()
 		return nil, err
 	}
 	if err := b.noise.RecvActTwo(actTwo); err != nil {
-		if b.banChan != nil {
-			b.banChan <- &channeldb.BrontideOffense{err, b.noise.remoteStatic, b.conn.RemoteAddr()}
+		if banChan != nil {
+			banChan <- &channeldb.Offense{err, b.noise.remoteStatic, b.conn.RemoteAddr(), channeldb.BrontideConn}
 		}
 		b.conn.Close()
 		return nil, err

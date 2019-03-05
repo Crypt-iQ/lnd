@@ -193,11 +193,11 @@ type server struct {
 	wg sync.WaitGroup
 }
 
+// TODO(eugene) - comment
 type banKit struct {
-	// TODO(eugene) - comment
 	banStore      channeldb.BanStore
 	offenders     map[string]*connmgr.DynamicBanScore
-	brontideChans map[net.Addr]<-chan *channeldb.BrontideOffense
+	brontideChans map[net.Addr]<-chan *channeldb.Offense
 	brontideMtx   sync.RWMutex
 }
 
@@ -245,7 +245,7 @@ func noiseDial(idPriv *btcec.PrivateKey, banKit *banKit) func(net.Addr) (net.Con
 
 		// Create the chan that the connection will send errors over so that
 		// the server can ban offenders
-		banChan := make(chan *channeldb.BrontideOffense)
+		banChan := make(chan *channeldb.Offense)
 
 		// Add the remote peer and chan to the map
 		banKit.brontideMtx.Lock()
@@ -271,13 +271,13 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 
 	// Initialize the offenders and brontideChans maps
 	offenders := make(map[string]*connmgr.DynamicBanScore)
-	brontideChans := make(map[net.Addr]<-chan *channeldb.BrontideOffense)
+	brontideChans := make(map[net.Addr]<-chan *channeldb.Offense)
 
 	listeners := make([]net.Listener, len(listenAddrs))
 	for i, listenAddr := range listenAddrs {
 		// Create the chan that the listener will send errors over so that
 		// the server can ban offenders
-		banChan := make(chan *channeldb.BrontideOffense)
+		banChan := make(chan *channeldb.Offense)
 
 		// Note: though brontide.NewListener uses ResolveTCPAddr, it
 		// doesn't need to call the general lndResolveTCP function
@@ -2873,7 +2873,7 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 func (s *server) connectToPeer(addr *lnwire.NetAddress, errChan chan<- error) {
 	// Create the chan that the connection will send errors over so that the
 	// server can ban offenders
-	banChan := make(chan *channeldb.BrontideOffense)
+	banChan := make(chan *channeldb.Offense)
 
 	// Add the remote peer and chan to the map
 	s.banKit.brontideMtx.Lock()
@@ -3364,13 +3364,21 @@ func (s *server) handleBrontideOffenses() {
 	for {
 		// Acquire the lock so that new connections must wait to add to the
 		// brontideChans map.
-		s.banKit.brontideMtx.RLock()
+		// TODO(eugene) - Will this affect timeouts?
+		s.banKit.brontideMtx.Lock()
 
 		// Loop through all brontide listener chans and check to see if there
 		// are any updates
-		for _, banChan := range s.banKit.brontideChans {
+		for addr, banChan := range s.banKit.brontideChans {
 			select {
 			case offense := <-banChan:
+				// Check if this offense is from a BrontideConn Offender and
+				// delete the associated entry from the brontideChans map if
+				// so because the connection is now closed.
+				if offense.Offender == channeldb.BrontideConn {
+					delete(s.banKit.brontideChans, addr)
+				}
+
 				var persistent uint32
 				var transient uint32
 
@@ -3431,7 +3439,7 @@ func (s *server) handleBrontideOffenses() {
 					if dynBanScore.Int() >= 200 {
 						err := s.banKit.banStore.BanPeer(offense.Pubkey, time.Hour)
 						if err != nil {
-							s.banKit.brontideMtx.RUnlock()
+							s.banKit.brontideMtx.Unlock()
 							return
 						}
 					}
@@ -3443,7 +3451,7 @@ func (s *server) handleBrontideOffenses() {
 					// Serialize the address
 					err := channeldb.SerializeAddr(&b, offense.Addr)
 					if err != nil {
-						s.banKit.brontideMtx.RUnlock()
+						s.banKit.brontideMtx.Unlock()
 						return
 					}
 
@@ -3472,7 +3480,7 @@ func (s *server) handleBrontideOffenses() {
 					if dynBanScore.Int() >= 200 {
 						err := s.banKit.banStore.BanPeer(nil, time.Hour, offense.Addr)
 						if err != nil {
-							s.banKit.brontideMtx.RUnlock()
+							s.banKit.brontideMtx.Unlock()
 							return
 						}
 					}
@@ -3484,6 +3492,6 @@ func (s *server) handleBrontideOffenses() {
 			}
 		}
 
-		s.banKit.brontideMtx.RUnlock()
+		s.banKit.brontideMtx.Unlock()
 	}
 }

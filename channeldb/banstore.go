@@ -58,13 +58,26 @@ type BanStore interface {
 	Stop() error // TODO(eugene) - needed?
 }
 
-// TODO(eugene) - BrontideOffense comment
-// TODO(eugene) - Rename to Offense and move to server.go
-type BrontideOffense struct {
-	Err    error
-	Pubkey *btcec.PublicKey
-	Addr   net.Addr
+// TODO(eugene) - comment
+type Offense struct {
+	Err      error
+	Pubkey   *btcec.PublicKey
+	Addr     net.Addr
+	Offender Offender
 }
+
+type Offender uint8
+
+const (
+	// TODO(eugene) - comment
+	BrontideListener Offender = iota
+
+	// TODO(eugene) - comment
+	BrontideConn
+
+	// TODO(eugene) - comment
+	Peer
+)
 
 // TODO(eugene) - GenericBanStore comment
 type GenericBanStore struct {

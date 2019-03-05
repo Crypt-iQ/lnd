@@ -27,7 +27,7 @@ type Listener struct {
 
 	banStore channeldb.BanStore
 
-	banChan chan<- *channeldb.BrontideOffense
+	banChan chan<- *channeldb.Offense
 
 	handshakeSema chan struct{}
 	conns         chan maybeConn
@@ -41,7 +41,7 @@ var _ net.Listener = (*Listener)(nil)
 // during both initial connection establishment and data transfer.
 func NewListener(localStatic *btcec.PrivateKey, listenAddr string,
 	banStore channeldb.BanStore,
-	banChan chan<- *channeldb.BrontideOffense) (*Listener, error) {
+	banChan chan<- *channeldb.Offense) (*Listener, error) {
 
 	addr, err := net.ResolveTCPAddr("tcp", listenAddr)
 	if err != nil {
@@ -143,7 +143,7 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	var actOne [ActOneSize]byte
 	if _, err := io.ReadFull(conn, actOne[:]); err != nil {
 		if l.banChan != nil {
-			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+			l.banChan <- &channeldb.Offense{err, nil, conn.RemoteAddr(), channeldb.BrontideListener}
 		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
@@ -151,7 +151,7 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	}
 	if err := brontideConn.noise.RecvActOne(actOne); err != nil {
 		if l.banChan != nil {
-			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+			l.banChan <- &channeldb.Offense{err, nil, conn.RemoteAddr(), channeldb.BrontideListener}
 		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
@@ -189,7 +189,7 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	var actThree [ActThreeSize]byte
 	if _, err := io.ReadFull(conn, actThree[:]); err != nil {
 		if l.banChan != nil {
-			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+			l.banChan <- &channeldb.Offense{err, nil, conn.RemoteAddr(), channeldb.BrontideListener}
 		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))
@@ -197,7 +197,7 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	}
 	if err := brontideConn.noise.RecvActThree(actThree); err != nil {
 		if l.banChan != nil {
-			l.banChan <- &channeldb.BrontideOffense{err, nil, conn.RemoteAddr()}
+			l.banChan <- &channeldb.Offense{err, nil, conn.RemoteAddr(), channeldb.BrontideListener}
 		}
 		brontideConn.conn.Close()
 		l.rejectConn(rejectedConnErr(err, remoteAddr))

@@ -181,6 +181,7 @@ func (l *Listener) doHandshake(conn net.Conn) {
 	// We'll ensure that we get ActTwo from the remote peer in a timely
 	// manner. If they don't respond within 1 second, then we'll kill the
 	// connection.
+	// TODO(eugene) - Update 1 second comment
 	conn.SetReadDeadline(time.Now().Add(handshakeReadTimeout))
 
 	// Finally, finish the handshake processes by reading and decrypting

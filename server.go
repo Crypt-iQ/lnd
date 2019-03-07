@@ -3364,7 +3364,6 @@ func (s *server) handleBrontideOffenses() {
 	for {
 		// Acquire the lock so that new connections must wait to add to the
 		// brontideChans map.
-		// TODO(eugene) - Will this affect timeouts?
 		s.banKit.brontideMtx.Lock()
 
 		// Loop through all brontide listener chans and check to see if there
@@ -3382,6 +3381,7 @@ func (s *server) handleBrontideOffenses() {
 				var persistent uint32
 				var transient uint32
 
+				// TODO(eugene) - If we include EOFs (or timeouts), the peers will ban each other.
 				// Switch on the error to determine the penalty
 				switch offense.Err {
 				case io.EOF:

@@ -97,6 +97,13 @@ var (
 			number:    8,
 			migration: migrateGossipMessageStoreKeys,
 		},
+		{
+			// The DB version that changes the way we store open
+			// channels and no longer stores raw revocation producers
+			// on disk. A keychain.KeyLocator is instead stored.
+			number: 9,
+			migration: migrateShachainAndStoreKeyLocator,
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over

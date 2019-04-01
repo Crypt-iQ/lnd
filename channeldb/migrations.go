@@ -683,3 +683,29 @@ func migrateGossipMessageStoreKeys(tx *bbolt.Tx) error {
 
 	return nil
 }
+
+// migrateShachainAndStoreKeyLocator migrates the storage of open channels
+// to no longer store raw revocation producers and instead store a
+// keychain.KeyLocator so that the shachain root can be found if necessary
+// in case of static channel backup.
+func migrateShachainAndStoreKeyLocator(tx *bbolt.Tx) error {
+	// TODO - how to do this?
+	// We have:
+	// <current rev, producer, array of revs>
+	//
+	// We want:
+	// <current rev, array of revs>
+	//
+	// How do we deprecate this?
+	// revocationStateKey
+
+	// openChannelBucket -> <nodePub, nodeBucket> -> <chainhash, chainBucket> -> <chanPoint, chanBucket> -> <revocationStateKey, revStateInfo>
+	// Hold off on migration until TLV system is in place...
+
+	//putChanInfo
+	//putChanCommitments
+	//putChanRevocationState
+
+	// How can we design a TLV system if we are using WriteElements for everything?
+	// How does a TLV system make migrations more streamlined?
+}

@@ -50,8 +50,8 @@ var (
 	// party.
 	chanCommitmentKey = []byte("chan-commitment-key")
 
-	// revocationStateKey stores their current revocation hash, our
-	// preimage producer and their preimage store.
+	// revocationStateKey stores their current revocation hash and their
+	// preimage store.
 	revocationStateKey = []byte("revocation-state-key")
 
 	// dataLossCommitPointKey stores the commitment point received from the
@@ -381,6 +381,39 @@ func (c ChannelStatus) String() string {
 	return statusStr
 }
 
+// OpenChannelType describes the various types that an OpenChannel struct
+// contains. These types are used in the TLV system when reading from / writing
+// to the db.
+type OpenChannelType uint16
+
+const (
+	ChanType = 0
+	ChainHash = 1
+	FundingOutpoint = 2
+	ShortChannelID = 3
+	IsPending = 4
+	IsInitiator = 5
+	ChanStatus = 6
+	FundingBroadcastHeight = 7
+	NumConfsRequired = 8
+	ChannelFlags = 9
+	IdentityPub = 10
+	Capacity = 11
+	TotalMSatSent = 12
+	TotalMSatReceived = 13
+	LocalChanCfg = 14
+	RemoteChanCfg = 15
+	LocalCommitment = 16
+	RemoteCommitment = 17
+	RemoteCurrentRevocation = 18
+	RemoteNextRevocation = 19
+	RevocationProducer = 20
+	RevocationStore = 21
+	KeyLocator = 22
+	Packager = 23
+	FundingTxn = 24
+)
+
 // OpenChannel encapsulates the persistent and dynamic state of an open channel
 // with a remote node. An open channel supports several options for on-disk
 // serialization depending on the exact context. Full (upon channel creation)
@@ -492,6 +525,10 @@ type OpenChannel struct {
 	// previous channels states sent to us by remote side. Current
 	// implementation of secret store is shachain store.
 	RevocationStore shachain.Store
+
+	// KeyLocator is used in the DLP protocol to derive the shachain root
+	// in order to recover funds.
+	KeyLocator keychain.KeyLocator
 
 	// Packager is used to create and update forwarding packages for this
 	// channel, which encodes all necessary information to recover from
@@ -2412,17 +2449,31 @@ func writeChanConfig(b io.Writer, c *ChannelConfig) error {
 }
 
 func putChanInfo(chanBucket *bbolt.Bucket, channel *OpenChannel) error {
+	//var w bytes.Buffer
+	//if err := WriteElements(&w,
+	//	channel.ChanType, channel.ChainHash, channel.FundingOutpoint,
+	//	channel.ShortChannelID, channel.IsPending, channel.IsInitiator,
+	//	channel.chanStatus, channel.FundingBroadcastHeight,
+	//	channel.NumConfsRequired, channel.ChannelFlags,
+	//	channel.IdentityPub, channel.Capacity, channel.TotalMSatSent,
+	//	channel.TotalMSatReceived,
+	//); err != nil {
+	//	return err
+	//}
+
 	var w bytes.Buffer
-	if err := WriteElements(&w,
-		channel.ChanType, channel.ChainHash, channel.FundingOutpoint,
-		channel.ShortChannelID, channel.IsPending, channel.IsInitiator,
-		channel.chanStatus, channel.FundingBroadcastHeight,
-		channel.NumConfsRequired, channel.ChannelFlags,
-		channel.IdentityPub, channel.Capacity, channel.TotalMSatSent,
-		channel.TotalMSatReceived,
-	); err != nil {
+
+	if err := WriteElement(&w, channel.ChanType); err != nil {
 		return err
 	}
+
+	// Read from, write to new buffer, reset the buffer.
+
+	// <type, length, value>
+	// We have type and length and value.
+	// But it is tricky to get the length and value out of the writer
+	// and then like append it to the necessary place. A better idea would be to
+	// copy it as we go...
 
 	// For single funder channels that we initiated, write the funding txn.
 	if channel.ChanType == SingleFunder && channel.IsInitiator {

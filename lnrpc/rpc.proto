@@ -867,6 +867,12 @@ message SendRequest {
     maximum enforced.
     */
     uint32 cltv_limit = 10;
+
+    /**
+    An optional minimum number of hops in a route. If zero, this minimum is
+    not enforced.
+    */
+    uint32 min_hops = 11;
 }
 
 message SendResponse {

@@ -3053,6 +3053,11 @@
           "type": "integer",
           "format": "int64",
           "description": "* \nAn optional maximum total time lock for the route. If zero, there is no\nmaximum enforced."
+        },
+        "min_hops": {
+          "type": "integer",
+          "format": "int64",
+          "description": "*\nAn optional minimum number of hops in a route. If zero, this minimum is\nnot enforced."
         }
       }
     },

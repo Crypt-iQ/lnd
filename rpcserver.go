@@ -2866,6 +2866,7 @@ type rpcPaymentIntent struct {
 	cltvDelta         uint16
 	routeHints        [][]zpay32.HopHint
 	outgoingChannelID *uint64
+	minHops           *uint32
 
 	routes []*routing.Route
 }
@@ -2907,6 +2908,14 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 	// Take cltv limit from request if set.
 	if rpcPayReq.CltvLimit != 0 {
 		payIntent.cltvLimit = &rpcPayReq.CltvLimit
+	}
+
+	if rpcPayReq.MinHops != 0 {
+		if rpcPayReq.MinHops > 20 {
+			return payIntent, errors.New("min hops must not be greater than 20")
+		}
+
+		payIntent.minHops = &rpcPayReq.MinHops
 	}
 
 	// If the payment request field isn't blank, then the details of the
@@ -3062,6 +3071,7 @@ func (r *rpcServer) dispatchPaymentIntent(
 			PaymentHash:       payIntent.rHash,
 			RouteHints:        payIntent.routeHints,
 			OutgoingChannelID: payIntent.outgoingChannelID,
+			MinHops:           payIntent.minHops,
 		}
 
 		// If the final CLTV value was specified, then we'll use that

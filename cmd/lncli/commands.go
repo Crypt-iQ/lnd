@@ -2079,6 +2079,11 @@ var sendPaymentCommand = cli.Command{
 				"use for the first hop of the payment",
 			Value: 0,
 		},
+		cli.UintFlag{
+			Name: "min_hops",
+			Usage: "min number of hops in a route",
+			Value: 0,
+		},
 		cli.BoolFlag{
 			Name:  "force, f",
 			Usage: "will skip payment request confirmation",
@@ -2177,6 +2182,7 @@ func sendPayment(ctx *cli.Context) error {
 			FeeLimit:       feeLimit,
 			OutgoingChanId: ctx.Uint64("outgoing_chan_id"),
 			CltvLimit:      uint32(ctx.Int(cltvLimitFlag.Name)),
+			MinHops:        uint32(ctx.Int("min_hops")),
 		}
 
 		return sendPaymentRequest(client, req)
@@ -2256,6 +2262,17 @@ func sendPayment(ctx *cli.Context) error {
 				return err
 			}
 			req.FinalCltvDelta = int32(delta)
+		}
+
+		switch {
+		case ctx.IsSet("min_hops"):
+			req.MinHops = uint32(ctx.Int("min_hops"))
+		case args.Present():
+			hops, err := strconv.ParseInt(args.First(), 10, 32)
+			if err != nil {
+				return err
+			}
+			req.MinHops = uint32(hops)
 		}
 	}
 

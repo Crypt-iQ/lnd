@@ -403,6 +403,9 @@ type RestrictParams struct {
 	// ctlv. After path finding is complete, the caller needs to increase
 	// all cltv expiry heights with the required final cltv delta.
 	CltvLimit *uint32
+
+	// MinHops is the minimum number of hops a route must have.
+	MinHops *uint32
 }
 
 // findPath attempts to find a path from the source node within the

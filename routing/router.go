@@ -1583,6 +1583,10 @@ type LightningPayment struct {
 	// hop. If nil, any channel may be used.
 	OutgoingChannelID *uint64
 
+	// MinHops is the minimum number of hops a route must have for us to
+	// send the payment through.
+	MinHops *uint32
+
 	// TODO(roasbeef): add e2e message?
 }
 

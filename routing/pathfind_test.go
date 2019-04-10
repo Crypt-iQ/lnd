@@ -1203,7 +1203,7 @@ func TestNewRoute(t *testing.T) {
 }
 
 func TestNewRoutePathTooLong(t *testing.T) {
-	t.Skip()
+	t.Parallel()
 
 	// Ensure that potential paths which are over the maximum hop-limit are
 	// rejected.

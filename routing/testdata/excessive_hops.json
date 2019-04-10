@@ -123,7 +123,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10,
-		        "fee_rate": 0.001,
+		        "fee_rate": 1000,
 		        "capacity": 100000
 		},
 		{
@@ -137,7 +137,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10,
-		        "fee_rate": 0.001,
+		        "fee_rate": 1000,
 		        "capacity": 100000
 		},
 		{
@@ -151,7 +151,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -165,7 +165,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -179,7 +179,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -193,7 +193,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -207,7 +207,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -221,7 +221,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -235,7 +235,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -249,7 +249,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -263,7 +263,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -277,7 +277,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -291,7 +291,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -305,7 +305,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -319,7 +319,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -333,7 +333,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -347,7 +347,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -361,7 +361,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -375,7 +375,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
@@ -389,12 +389,12 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		},
 		{
-		        "node_1": "0369bca64993fce966745d32c09b882f668958d9bd7aabb60ba35ef1884013be1d",
-		        "node_2": "0367cec75158a4129177bfb8b269cb586efe93d751b43800d456485e81c2620ca6",
+			"node_1": "0367cec75158a4129177bfb8b269cb586efe93d751b43800d456485e81c2620ca6",
+		        "node_2": "0369bca64993fce966745d32c09b882f668958d9bd7aabb60ba35ef1884013be1d",
 		        "channel_id": 12545, 
 		        "channel_point": "89bc56859c6a082d15ba1a7f6cb6be3fea62e1746e2cb8497b1189155c21a233:0", 
 		        "channel_flags": 0,
@@ -403,7 +403,7 @@
 		        "min_htlc": 1,
 		        "max_htlc": 100000000,
 		        "fee_base_msat": 10, 
-		        "fee_rate": 0.001, 
+		        "fee_rate": 1000, 
 		        "capacity": 100000
 		}
 	]

@@ -506,6 +506,10 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		ignoredNodes = make(map[Vertex]struct{})
 	}
 
+	// We use this map to track which nodes have already been visited so
+	// we don't check the weights of these nodes again.
+	visitedNodes := make(map[Vertex]struct{})
+
 	// processEdge is a helper closure that will be used to make sure edges
 	// satisfy our specific requirements.
 	processEdge := func(fromNode *channeldb.LightningNode,
@@ -513,6 +517,11 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		bandwidth lnwire.MilliSatoshi, toNode Vertex) {
 
 		fromVertex := Vertex(fromNode.PubKeyBytes)
+
+		// Check if the fromVertex node was previously visited.
+		if _, ok := visitedNodes[fromVertex]; ok {
+			return
+		}
 
 		// If this is not a local channel and it is disabled, we will
 		// skip it.
@@ -719,6 +728,10 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		if err != nil {
 			return nil, err
 		}
+
+		// We have visited the node and explored all incoming edges so
+		// we add it to our visited map.
+		visitedNodes[pivot] = struct{}{}
 
 		// Then, we'll examine all the additional edges from the node
 		// we're currently visiting. Since we don't know the capacity

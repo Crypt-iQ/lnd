@@ -729,10 +729,6 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 			return nil, err
 		}
 
-		// We have visited the node and explored all incoming edges so
-		// we add it to our visited map.
-		visitedNodes[pivot] = struct{}{}
-
 		// Then, we'll examine all the additional edges from the node
 		// we're currently visiting. Since we don't know the capacity
 		// of the private channel, we'll assume it was selected as a
@@ -743,6 +739,10 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 			processEdge(reverseEdge.sourceNode, reverseEdge.edge,
 				bandWidth, pivot)
 		}
+
+		// We have visited the node and explored all incoming edges so
+		// we add it to our visited map.
+		visitedNodes[pivot] = struct{}{}
 	}
 
 	// If the source node isn't found in the next hop map, then a path

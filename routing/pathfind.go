@@ -835,11 +835,13 @@ func findPaths(tx *bbolt.Tx, graph *channeldb.ChannelGraph,
 	// the sub-graphs created to find the next k-th shortest path.
 	for k := uint32(1); k < numPaths; k++ {
 		prevShortest := shortestPaths[k-1]
+		fmt.Println(len(prevShortest))
 
 		// We'll examine each edge in the previous iteration's shortest
 		// path in order to find path deviations from each node in the
 		// path.
 		for i := 0; i < len(prevShortest)-1; i++ {
+			fmt.Println(i)
 			// These two maps will mark the edges and Vertexes
 			// we'll exclude from the next path finding attempt.
 			// These are required to ensure the paths are unique
@@ -933,6 +935,10 @@ func findPaths(tx *bbolt.Tx, graph *channeldb.ChannelGraph,
 			}
 			newPath.hops = append(newPath.hops, rootPath...)
 			newPath.hops = append(newPath.hops, spurPath...)
+
+			// fmt.Println(spew.Sdump(newPath.hops))
+			// fmt.Println(i)
+			// fmt.Println(k)
 
 			// TODO(roasbeef): add and consult path finger print
 

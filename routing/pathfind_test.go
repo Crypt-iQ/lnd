@@ -42,6 +42,8 @@ const (
 	// the payload for each hop in path properly.
 	specExampleFilePath = "testdata/spec_example.json"
 
+	kShortestGraphFilePath = "testdata/k_shortest.json"
+
 	// noFeeLimit is the maximum value of a payment through Lightning. We
 	// can use this value to signal there is no fee limit since payments
 	// should never be larger than this.
@@ -926,6 +928,63 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 	// The path should represent the following hops:
 	//	roasbeef -> songoku -> doge
 	assertExpectedPath(t, graph.aliasMap, path, "songoku", "doge")
+}
+
+func TestKShortestBug(t *testing.T) {
+	t.Parallel()
+
+	// Change graph
+	graph, err := parseTestGraph(kShortestGraphFilePath)
+	if err != nil {
+		t.Fatalf("unable to create graph: %v", err)
+	}
+	defer graph.cleanUp()
+
+	sourceNode, err := graph.graph.SourceNode()
+	if err != nil {
+		t.Fatalf("unable to fetch source node: %v", err)
+	}
+
+	paymentAmt := lnwire.NewMSatFromSatoshis(100)
+	target := graph.aliasMap["whisper"]
+	restrictions := &RestrictParams{
+		FeeLimit: noFeeLimit,
+	}
+	paths, err := findPaths(
+		nil, graph.graph, sourceNode.PubKeyBytes, target, paymentAmt,
+		restrictions, 3, nil,
+	)
+	if err != nil {
+		t.Fatalf("unable to find paths between roasbeef and "+
+			"whisper: %v", err)
+	}
+
+	// fmt.Println(len(paths))
+
+	assertExpectedPath(t, graph.aliasMap, paths[0], "roasbeef", "songoku", "whisper")
+
+	assertExpectedPath(t, graph.aliasMap, paths[1], "roasbeef", "songoku", "whisper")
+
+	assertExpectedPath(t, graph.aliasMap, paths[2], "roasbeef", "songoku", "satoshi", "bor", "whisper")
+
+	source := Vertex(sourceNode.PubKeyBytes)
+	_, err = pathsToFeeSortedRoutes(
+		source, paths, zpay32.DefaultFinalCLTVDelta, paymentAmt,
+		uint32(100),
+	)
+	if err != nil {
+		fmt.Println(err)
+		t.Fatalf("Crap")
+	}
+
+	// fmt.Println(spew.Sdump(validRoutes))
+	// validRoutes, err := pathsToFeeSortedRoutes(
+	// 	source, shortestPaths, finalCLTVDelta, amt,
+	// 	uint32(currentHeight),
+	// )
+	// if err != nil {
+	// 	return nil, err
+	// }
 }
 
 func TestKShortestPathFinding(t *testing.T) {

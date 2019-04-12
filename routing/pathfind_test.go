@@ -42,6 +42,8 @@ const (
 	// the payload for each hop in path properly.
 	specExampleFilePath = "testdata/spec_example.json"
 
+	visitedFilePath = "testdata/visited.json"
+
 	// noFeeLimit is the maximum value of a payment through Lightning. We
 	// can use this value to signal there is no fee limit since payments
 	// should never be larger than this.
@@ -926,6 +928,37 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 	// The path should represent the following hops:
 	//	roasbeef -> songoku -> doge
 	assertExpectedPath(t, graph.aliasMap, path, "songoku", "doge")
+}
+
+func TestVisitedPathFind(t *testing.T) {
+	t.Parallel()
+
+	graph, err := parseTestGraph(visitedFilePath)
+	if err != nil {
+		t.Fatalf("unable to create graph: %v", err)
+	}
+	defer graph.cleanUp()
+
+	sourceNode, err := graph.graph.SourceNode()
+	if err != nil {
+		t.Fatalf("unable to fetch source node: %v", err)
+	}
+
+	paymentAmt := lnwire.NewMSatFromSatoshis(100)
+
+	target := graph.aliasMap["ursula"]
+	_, err = findPath(
+		&graphParams{
+			graph: graph.graph,
+		},
+		&RestrictParams{
+			FeeLimit: noFeeLimit,
+		},
+		sourceNode.PubKeyBytes, target, paymentAmt,
+	)
+	if err != nil {
+		t.Fatalf("path should have been found")
+	}
 }
 
 func TestKShortestPathFinding(t *testing.T) {

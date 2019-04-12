@@ -519,9 +519,9 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		fromVertex := Vertex(fromNode.PubKeyBytes)
 
 		// Check if the fromVertex node was previously visited.
-		if _, ok := visitedNodes[fromVertex]; ok {
-			return
-		}
+		// if _, ok := visitedNodes[fromVertex]; ok {
+		// 	return
+		// }
 
 		// If this is not a local channel and it is disabled, we will
 		// skip it.
@@ -676,6 +676,8 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		// If we've reached our source (or we don't have any incoming
 		// edges), then we're done here and can exit the graph
 		// traversal early.
+		fmt.Println(Vertex(bestNode.PubKeyBytes))
+		fmt.Println(partialPath.dist)
 		if bestNode.PubKeyBytes == source {
 			break
 		}
@@ -708,6 +710,20 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 					edgeInfo.Capacity,
 				)
 			}
+
+			// var fromBytes [33]byte
+			// switch {
+			// case bytes.Equal(edgeInfo.NodeKey1Bytes[:], pivot[:]):
+			// 	fromBytes = edgeInfo.NodeKey2Bytes
+			// case bytes.Equal(edgeInfo.NodeKey2Bytes[:], pivot[:]):
+			// 	fromBytes = edgeInfo.NodeKey1Bytes
+			// default:
+			// 	return fmt.Errorf("node not participating in this channel")
+			// }
+
+			// if _, ok := visitedNodes[Vertex(fromBytes)]; ok {
+			// 	return nil
+			// }
 
 			// Before we can process the edge, we'll need to fetch
 			// the node on the _other_ end of this channel as we

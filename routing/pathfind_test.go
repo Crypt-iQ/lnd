@@ -12,15 +12,21 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/coreos/bbolt"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
@@ -79,6 +85,44 @@ func noProbabilitySource(route.Vertex, EdgeLocator, lnwire.MilliSatoshi) float64
 	return 1
 }
 
+type testExportedGraph struct {
+	Nodes []testExportedNodes `json:"nodes"`
+	Edges []testExportedEdges `json:"edges"`
+}
+
+type testExportedAddr struct {
+	Network string `json:"network"`
+	Addr    string `json:"addr"`
+}
+
+type testExportedNodes struct {
+	LastUpdate uint64             `json:"last_update"`
+	PubKey     string             `json:"pub_key"`
+	Alias      string             `json:"alias"`
+	Addresses  []testExportedAddr `json:"addresses"`
+	Color      string             `json:"color"`
+}
+
+type testExportedPolicy struct {
+	TimeLockDelta uint16 `json:"time_lock_delta"`
+	MinHTLC       string `json:"min_htlc"`
+	FeeBaseMsat   string `json:"fee_base_msat"`
+	FeeRate       string `json:"fee_rate_milli_sat"`
+	Disabled      bool   `json:"disabled"`
+	MaxHTLC       string `json:"max_htlc_msat"`
+}
+
+type testExportedEdges struct {
+	ChannelID    string             `json:"channel_id"`
+	ChannelPoint string             `json:"chan_point"`
+	LastUpdate   uint64             `json:"last_update"`
+	Node1        string             `json:"node1_pub"`
+	Node2        string             `json:"node2_pub"`
+	Capacity     string             `json:"capacity"`
+	Node1Policy  testExportedPolicy `json:"node1_policy"`
+	Node2Policy  testExportedPolicy `json:"node2_policy"`
+}
+
 // testGraph is the struct which corresponds to the JSON format used to encode
 // graphs within the files in the testdata directory.
 //
@@ -121,7 +165,7 @@ type testChan struct {
 func makeTestGraph() (*channeldb.ChannelGraph, func(), error) {
 	// First, create a temporary directory to be used for the duration of
 	// this test.
-	tempDirName, err := ioutil.TempDir("", "channeldb")
+	tempDirName, err := ioutil.TempDir("/Users/nsa/Desktop", "channeldb")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,10 +178,370 @@ func makeTestGraph() (*channeldb.ChannelGraph, func(), error) {
 
 	cleanUp := func() {
 		cdb.Close()
-		os.RemoveAll(tempDirName)
+		// os.RemoveAll(tempDirName)
 	}
 
 	return cdb.ChannelGraph(), cleanUp, nil
+}
+
+func TestExpGraph(t *testing.T) {
+	// graph, err := parseExportedGraph()
+	// if err != nil {
+	// 	t.Fatalf("Crap: %v", err)
+	// }
+	// defer graph.cleanUp()
+
+	bdb, err := channeldb.Open("/Users/nsa/Desktop/channeldb922597173")
+	if err != nil {
+		t.Fatalf("Failed to open: %v", err)
+	}
+	defer bdb.Close()
+
+	graph := bdb.ChannelGraph()
+
+	// sourceNode, err := graph.SourceNode()
+	// if err != nil {
+	// 	t.Fatalf("unable to fetch source node: %v", err)
+	// }
+	sourceNodeBytes, _ := hex.DecodeString("02b2eac9af2c15479e0376357c9b6070d8b9bdabfce9a688250e79efe2cfd0282f")
+	var sourceNodeT [33]byte
+	copy(sourceNodeT[:], sourceNodeBytes[:])
+
+	paymentAmt := lnwire.NewMSatFromSatoshis(10000)
+
+	// count := 0
+	// Find a path to every node in the graph and then log the time
+	// it took. Compare with original find paths.
+	err = graph.ForEachNode(nil, func(_ *bbolt.Tx,
+		node *channeldb.LightningNode) error {
+
+		// TODO -  Hex decode the string HERE
+		hexPub := hex.EncodeToString(node.PubKeyBytes[:])
+
+		start := time.Now()
+		vertex := route.Vertex(node.PubKeyBytes)
+		// Path find to all nodes!
+		_, err := findPath(
+			&graphParams{
+				graph: graph,
+			},
+			noRestrictions,
+			sourceNodeT, vertex, paymentAmt,
+		)
+		if err != nil {
+			// end := time.Now()
+			// elapsed := end.Sub(start) / time.Millisecond
+			fmt.Printf("%v,NA\n", hexPub)
+
+			// count++
+			// failed pathfinding - doesn't matter
+			return nil
+		}
+
+		end := time.Now()
+		elapsed := end.Sub(start) / time.Millisecond
+		fmt.Printf("%v,%d\n", hexPub, elapsed)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("failed pathfinding: %v", err)
+	}
+
+	pprof.Lookup("heap").WriteTo(os.Stdout, 1)
+	pprof.Lookup("allocs").WriteTo(os.Stdout, 1)
+
+	// heap
+	// alloc_space
+
+	// fmt.Printf("Failed pathfinding attempts: %d", count)
+}
+
+func TestParseGraph(t *testing.T) {
+	go func() {
+		listenAddr := net.JoinHostPort("", "9999")
+		profileRedirect := http.RedirectHandler("/debug/pprof",
+			http.StatusSeeOther)
+		http.Handle("/", profileRedirect)
+		fmt.Println(http.ListenAndServe(listenAddr, nil))
+	}()
+
+	// graph, err := parseExportedGraph()
+	// if err != nil {
+	// 	t.Fatalf("Crap: %v", err)
+	// }
+	// defer graph.cleanUp()
+
+	// TODO - Let's try various configurations of:
+	// 1. db size
+	// 2. source nodes?
+	// 3. master, 466e873, visited
+	// And see what affect the heap has on any of this
+	bdb, err := channeldb.Open("/Users/nsa/go/dev/test/data/graph/testnet")
+	if err != nil {
+		t.Fatalf("Failed to open: %v", err)
+	}
+	defer bdb.Close()
+
+	graph := bdb.ChannelGraph()
+
+	// Set source node...
+
+	sourceNode, err := graph.SourceNode()
+	if err != nil {
+		t.Fatalf("unable to fetch source node: %v", err)
+	}
+
+	paymentAmt := lnwire.NewMSatFromSatoshis(10000)
+
+	// count := 0
+	// Find a path to every node in the graph and then log the time
+	// it took. Compare with original find paths.
+	err = graph.ForEachNode(nil, func(_ *bbolt.Tx,
+		node *channeldb.LightningNode) error {
+
+		// TODO -  Hex decode the string HERE
+		hexPub := hex.EncodeToString(node.PubKeyBytes[:])
+
+		start := time.Now()
+		vertex := route.Vertex(node.PubKeyBytes)
+		// Path find to all nodes!
+		_, err := findPath(
+			&graphParams{
+				graph: graph,
+			},
+			noRestrictions,
+			sourceNode.PubKeyBytes, vertex, paymentAmt,
+		)
+		if err != nil {
+			// end := time.Now()
+			// elapsed := end.Sub(start) / time.Millisecond
+			fmt.Printf("%v,NA\n", hexPub)
+
+			// count++
+			// failed pathfinding - doesn't matter
+			return nil
+		}
+
+		end := time.Now()
+		elapsed := end.Sub(start) / time.Millisecond
+		fmt.Printf("%v,%d\n", hexPub, elapsed)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("failed pathfinding: %v", err)
+	}
+
+	// pprof.Lookup("heap").WriteTo(os.Stdout, 1)
+	// pprof.Lookup("allocs").WriteTo(os.Stdout, 1)
+
+	// fmt.Printf("Failed pathfinding attempts: %d", count)
+}
+
+func parseExportedGraph() (*testGraphInstance, error) {
+	graphJSON, err := ioutil.ReadFile("testdata/graph.json")
+	if err != nil {
+		return nil, err
+	}
+
+	var g testExportedGraph
+	if err := json.Unmarshal(graphJSON, &g); err != nil {
+		return nil, err
+	}
+
+	var testAddrs []net.Addr
+	testAddr, err := net.ResolveTCPAddr("tcp", "192.0.0.1:8888")
+	if err != nil {
+		return nil, err
+	}
+	testAddrs = append(testAddrs, testAddr)
+
+	graph, cleanUp, err := makeTestGraph()
+	if err != nil {
+		return nil, err
+	}
+
+	aliasMap := make(map[string]route.Vertex)
+	var source *channeldb.LightningNode
+
+	sourceCount := 0
+	for _, node := range g.Nodes {
+		pubBytes, err := hex.DecodeString(node.PubKey)
+		if err != nil {
+			return nil, err
+		}
+
+		dbNode := &channeldb.LightningNode{
+			HaveNodeAnnouncement: true,
+			AuthSigBytes:         testSig.Serialize(),
+			LastUpdate:           testTime,
+			Addresses:            testAddrs,
+			Alias:                node.Alias,
+			Features:             testFeatures,
+		}
+		copy(dbNode.PubKeyBytes[:], pubBytes)
+
+		// No alias map
+		if sourceCount == 0 {
+			sourceCount++
+			source = dbNode
+		}
+
+		if err := graph.AddLightningNode(dbNode); err != nil {
+			return nil, err
+		}
+	}
+
+	if source != nil {
+		if err := graph.SetSourceNode(source); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, edge := range g.Edges {
+		node1Bytes, err := hex.DecodeString(edge.Node1)
+		if err != nil {
+			return nil, err
+		}
+
+		node2Bytes, err := hex.DecodeString(edge.Node2)
+		if err != nil {
+			return nil, err
+		}
+
+		if bytes.Compare(node1Bytes, node2Bytes) == 1 {
+			return nil, fmt.Errorf(
+				"channel %v node order incorrect",
+				edge.ChannelID,
+			)
+		}
+
+		fundingTXID := strings.Split(edge.ChannelPoint, ":")[0]
+		txidBytes, err := chainhash.NewHashFromStr(fundingTXID)
+		if err != nil {
+			return nil, err
+		}
+		fundingPoint := wire.OutPoint{
+			Hash:  *txidBytes,
+			Index: 0, // ?
+		}
+
+		chanID, err := strconv.ParseInt(edge.ChannelID, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		capacity, err := strconv.ParseInt(edge.Capacity, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		edgeInfo := channeldb.ChannelEdgeInfo{
+			ChannelID:    uint64(chanID),
+			AuthProof:    &testAuthProof,
+			ChannelPoint: fundingPoint,
+			Capacity:     btcutil.Amount(capacity),
+		}
+
+		copy(edgeInfo.NodeKey1Bytes[:], node1Bytes)
+		copy(edgeInfo.NodeKey2Bytes[:], node2Bytes)
+		copy(edgeInfo.BitcoinKey1Bytes[:], node1Bytes)
+		copy(edgeInfo.BitcoinKey2Bytes[:], node2Bytes)
+
+		err = graph.AddChannelEdge(&edgeInfo)
+		if err != nil && err != channeldb.ErrEdgeAlreadyExist {
+			return nil, err
+		}
+
+		minHTLC1, err := strconv.ParseInt(edge.Node1Policy.MinHTLC, 10, 64)
+		if err != nil {
+			minHTLC1 = 0
+			// return nil, err
+		}
+
+		maxHTLC1, err := strconv.ParseInt(edge.Node1Policy.MaxHTLC, 10, 64)
+		if err != nil {
+			maxHTLC1 = 0
+			// return nil, err
+		}
+
+		feeBase1, err := strconv.ParseInt(edge.Node1Policy.FeeBaseMsat, 10, 64)
+		if err != nil {
+			feeBase1 = 0
+			// return nil, err
+		}
+
+		feeRate1, err := strconv.ParseInt(edge.Node1Policy.FeeRate, 10, 64)
+		if err != nil {
+			feeRate1 = 0
+			// return nil, err
+		}
+
+		// node1policy
+		edgePolicy1 := &channeldb.ChannelEdgePolicy{
+			SigBytes:                  testSig.Serialize(),
+			MessageFlags:              lnwire.ChanUpdateMsgFlags(0),
+			ChannelFlags:              lnwire.ChanUpdateChanFlags(0),
+			ChannelID:                 uint64(chanID),
+			LastUpdate:                testTime,
+			TimeLockDelta:             edge.Node1Policy.TimeLockDelta,
+			MinHTLC:                   lnwire.MilliSatoshi(minHTLC1),
+			MaxHTLC:                   lnwire.MilliSatoshi(maxHTLC1),
+			FeeBaseMSat:               lnwire.MilliSatoshi(feeBase1),
+			FeeProportionalMillionths: lnwire.MilliSatoshi(feeRate1),
+		}
+		if err := graph.UpdateEdgePolicy(edgePolicy1); err != nil {
+			return nil, err
+		}
+
+		minHTLC2, err := strconv.ParseInt(edge.Node2Policy.MinHTLC, 10, 64)
+		if err != nil {
+			minHTLC2 = 0
+			// return nil, err
+		}
+
+		maxHTLC2, err := strconv.ParseInt(edge.Node2Policy.MaxHTLC, 10, 64)
+		if err != nil {
+			maxHTLC2 = 0
+			// return nil, err
+		}
+
+		feeBase2, err := strconv.ParseInt(edge.Node2Policy.FeeBaseMsat, 10, 64)
+		if err != nil {
+			feeBase2 = 0
+			// return nil, err
+		}
+
+		feeRate2, err := strconv.ParseInt(edge.Node2Policy.FeeRate, 10, 64)
+		if err != nil {
+			feeRate2 = 0
+			// return nil, err
+		}
+
+		// node2policy
+		edgePolicy2 := &channeldb.ChannelEdgePolicy{
+			SigBytes:                  testSig.Serialize(),
+			MessageFlags:              lnwire.ChanUpdateMsgFlags(0),
+			ChannelFlags:              lnwire.ChanUpdateChanFlags(1),
+			ChannelID:                 uint64(chanID),
+			LastUpdate:                testTime,
+			TimeLockDelta:             edge.Node2Policy.TimeLockDelta,
+			MinHTLC:                   lnwire.MilliSatoshi(minHTLC2),
+			MaxHTLC:                   lnwire.MilliSatoshi(maxHTLC2),
+			FeeBaseMSat:               lnwire.MilliSatoshi(feeBase2),
+			FeeProportionalMillionths: lnwire.MilliSatoshi(feeRate2),
+		}
+		if err := graph.UpdateEdgePolicy(edgePolicy2); err != nil {
+			return nil, err
+		}
+	}
+
+	return &testGraphInstance{
+		graph:    graph,
+		cleanUp:  cleanUp,
+		aliasMap: aliasMap,
+	}, nil
 }
 
 // parseTestGraph returns a fully populated ChannelGraph given a path to a JSON

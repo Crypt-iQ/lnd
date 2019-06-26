@@ -380,12 +380,12 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		// channels if bandwidth hint is set?
 		isSourceChan := fromVertex == source
 
-		edgeFlags := edge.ChannelFlags
-		isDisabled := edgeFlags&lnwire.ChanUpdateDisabled != 0
+		// edgeFlags := edge.ChannelFlags
+		// isDisabled := edgeFlags&lnwire.ChanUpdateDisabled != 0
 
-		if !isSourceChan && isDisabled {
-			return
-		}
+		// if !isSourceChan && isDisabled {
+		// 	return
+		// }
 
 		// If we have an outgoing channel restriction and this is not
 		// the specified channel, skip it.

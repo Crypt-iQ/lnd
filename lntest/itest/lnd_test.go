@@ -13928,6 +13928,91 @@ func testHoldInvoicePersistence(net *lntest.NetworkHarness, t *harnessTest) {
 	}
 }
 
+// respondChannelAccept receives a *lnrpc.ChannelAcceptRequest from the
+// funding manager and responds with a predicate telling the funding manager
+// to accept or reject the open channel request.
+func respondChannelAccept(predStream lnrpc.Lightning_ChannelAcceptorClient,
+	response *lnrpc.ChannelAcceptResponse, t *harnessTest) {
+	go func() {
+		// Opening the channel should send a *lnrpc.ChannelAcceptRequest to the stream.
+		if _, err := predStream.Recv(); err != nil {
+			t.Fatalf("unable to receive open channel request: %v", err)
+		}
+
+		// If a response was passed, we send it to the stream.
+		if response != nil {
+			if err := predStream.Send(response); err != nil {
+				t.Fatalf("unable to accept open channel request: %v", err)
+			}
+		}
+	}()
+}
+
+func testPredicateChannelAccept(net *lntest.NetworkHarness, t *harnessTest) {
+	ctxb := context.Background()
+
+	ctxt, cancel := context.WithCancel(ctxb)
+	defer cancel()
+
+	// Open up a bidirectional stream so that Bob can respond to incoming
+	// open channel requests.
+	bobPredStream, err := net.Bob.ChannelAcceptor(ctxt)
+	if err != nil {
+		t.Fatalf("unable to create channel acceptor stream for bob: %v", err)
+	}
+
+	// Accept the channel request.
+	acceptReponse := &lnrpc.ChannelAcceptResponse{
+		Accept: true,
+	}
+
+	respondChannelAccept(bobPredStream, acceptReponse, t)
+
+	// Here we are going to test an accepted channel open.
+	ctxt, _ = context.WithTimeout(ctxb, channelOpenTimeout)
+	_ = openChannelAndAssert(
+		ctxt, t, net, net.Alice, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: 100000,
+		},
+	)
+
+	// Reject the channel request.
+	rejectReponse := &lnrpc.ChannelAcceptResponse{
+		Accept: false,
+	}
+
+	respondChannelAccept(bobPredStream, rejectReponse, t)
+
+	// Here we are going to test a rejected channel open.
+	ctxt, _ = context.WithTimeout(ctxb, channelOpenTimeout)
+	_, err = net.OpenChannel(
+		ctxt, net.Alice, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: 100000,
+		},
+	)
+	if err == nil || grpc.Code(err) != 202 {
+		t.Fatalf("failed to reject channel: %v", err)
+	}
+
+	// Timeout the channel request.
+	respondChannelAccept(bobPredStream, nil, t)
+
+	// Here we are going to test timing out the predicate stream.
+	ctxt, _ = context.WithTimeout(ctxb, channelOpenTimeout)
+	_, err = net.OpenChannel(
+		ctxt, net.Alice, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: 100000,
+		},
+	)
+	if err == nil || grpc.Code(err) != 202 {
+		t.Fatalf("failed to reject channel: %v", err)
+	}
+
+}
+
 type testCase struct {
 	name string
 	test func(net *lntest.NetworkHarness, t *harnessTest)
@@ -14178,6 +14263,10 @@ var testsCases = []*testCase{
 	{
 		name: "cpfp",
 		test: testCPFP,
+	},
+	{
+		name: "test channel accept",
+		test: testPredicateChannelAccept,
 	},
 }
 

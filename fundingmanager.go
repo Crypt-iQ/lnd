@@ -216,8 +216,8 @@ func newSerializedKey(pubKey *btcec.PublicKey) serializedPubKey {
 }
 
 // fundingConfig defines the configuration for the FundingManager. All elements
-// within the configuration MUST be non-nil for the FundingManager to carry out
-// its duties.
+// within the configuration besides OpenChannelPredicate MUST be non-nil for the
+// FundingManager to carry out its duties.
 type fundingConfig struct {
 	// IDKey is the PublicKey that is used to identify this node within the
 	// Lightning Network.
@@ -348,6 +348,11 @@ type fundingConfig struct {
 	// NotifyOpenChannelEvent informs the ChannelNotifier when channels
 	// transition from pending open to open.
 	NotifyOpenChannelEvent func(wire.OutPoint)
+
+	// OpenChannelPredicate is a predicate on the lnwire.OpenChannel message
+	// and on the requesting node's public key that returns a bool which tells
+	// the funding manager whether or not to accept the channel.
+	OpenChannelPredicate ChannelAcceptor
 }
 
 // fundingManager acts as an orchestrator/bridge between the wallet's
@@ -1069,6 +1074,13 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 		f.failFundingFlow(
 			fmsg.peer, fmsg.msg.PendingChannelID,
 			lnwallet.ErrNonZeroPushAmount())
+		return
+	}
+
+	if !f.cfg.OpenChannelPredicate.Accept(fmsg.peer.IdentityKey(), fmsg.msg) {
+		f.failFundingFlow(
+			fmsg.peer, fmsg.msg.PendingChannelID,
+			fmt.Errorf("Open channel request rejected"))
 		return
 	}
 

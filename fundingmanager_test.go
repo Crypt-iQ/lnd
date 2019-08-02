@@ -366,6 +366,7 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 		ReservationTimeout:     1 * time.Nanosecond,
 		MaxPendingChannels:     DefaultMaxPendingChannels,
 		NotifyOpenChannelEvent: func(wire.OutPoint) {},
+		OpenChannelPredicate:   &DefaultChannelAcceptor{},
 	}
 
 	for _, op := range options {
@@ -460,6 +461,7 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 		},
 		ZombieSweeperInterval: oldCfg.ZombieSweeperInterval,
 		ReservationTimeout:    oldCfg.ReservationTimeout,
+		OpenChannelPredicate:  &DefaultChannelAcceptor{},
 	})
 	if err != nil {
 		t.Fatalf("failed recreating aliceFundingManager: %v", err)

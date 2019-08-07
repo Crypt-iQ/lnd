@@ -962,6 +962,9 @@ message ChannelAcceptRequest {
 message ChannelAcceptResponse {
     /// Whether or not the client accepts the channel.
     bool accept = 1;
+
+    /// The pending channel id to which this response applies.
+    bytes pending_chan_id = 2;
 }
 
 message ChannelPoint {

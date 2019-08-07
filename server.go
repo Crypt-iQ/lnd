@@ -29,6 +29,7 @@ import (
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/brontide"
 	"github.com/lightningnetwork/lnd/chanbackup"
+	"github.com/lightningnetwork/lnd/channelacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/channelnotifier"
 	"github.com/lightningnetwork/lnd/contractcourt"
@@ -1069,7 +1070,12 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB,
 		MaxPendingChannels:     cfg.MaxPendingChannels,
 		RejectPush:             cfg.RejectPush,
 		NotifyOpenChannelEvent: s.channelNotifier.NotifyOpenChannelEvent,
-		OpenChannelPredicate:   &DefaultChannelAcceptor{},
+		OpenChannelPredicate: &channelacceptor.ChainedAcceptor{
+			Acceptors: []channelacceptor.ChannelAcceptor{
+				&channelacceptor.DefaultAcceptor{},
+				&channelacceptor.RPCAcceptor{},
+			},
+		},
 	})
 	if err != nil {
 		return nil, err

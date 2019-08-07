@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lightningnetwork/lnd/channelacceptor"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/routing/route"
 	"github.com/lightningnetwork/lnd/watchtower"
@@ -5063,142 +5064,101 @@ func (r *rpcServer) SubscribeChannelBackups(req *lnrpc.ChannelBackupSubscription
 // time for this RPC.
 func (r *rpcServer) ChannelAcceptor(stream lnrpc.Lightning_ChannelAcceptorServer) error {
 
+	var acceptorClient *channelacceptor.ChanAcceptorClient
+	var rpcAcceptor *channelacceptor.RPCAcceptor
+
+	// If the OpenChannelPredicate is the ChainedAcceptor, locate the RPCAcceptor
+	// and register this RPC client.
 	openChanPredicate := r.server.fundingMgr.cfg.OpenChannelPredicate
-	predicate, ok := openChanPredicate.(*DefaultChannelAcceptor)
+	chainedAcceptor, ok := openChanPredicate.(*channelacceptor.ChainedAcceptor)
 	if !ok {
-		// The funding manager is using a non-streaming ChannelAcceptor
-		// implementation.
+		// The funding manager is not using the ChainedAcceptor.
 		return errors.New("unable to set up stream")
 	}
 
-	acceptorClient, err := predicate.RegisterClient()
-	if err != nil {
-		return err
+	for _, acceptor := range chainedAcceptor.Acceptors {
+		rpcAcceptor, ok = acceptor.(*channelacceptor.RPCAcceptor)
+		if ok {
+			tempClient, err := rpcAcceptor.RegisterClient()
+			if err != nil {
+				return err
+			}
+
+			acceptorClient = tempClient
+			break
+		}
 	}
 
-	// predChan is used by the receive loop to signal success in responding
-	// to a ChannelAcceptRequest or to signal the sending loop to shut down
-	// by closing it.
-	predChan := make(chan struct{})
+	if acceptorClient == nil {
+		return errors.New("unable to set up stream")
+	}
 
 	// errChan is used by the receive loop to signal any errors that occur
-	// during reading from the stream. This is primarily used to shutdown
-	// the send loop in the case of an RPC client disconnecting when there
-	// are no active open channel requests coming through from the funding
-	// manager.
+	// during reading from the stream. This is primarily used to shutdown the
+	// send loop in the case of an RPC client disconnecting.
 	errChan := make(chan error)
 
-	// We need to have the stream.Recv() in a goroutine so the loop that sends
-	// requests to the client can terminate the stream if we've been attempting
-	// to receive on the stream for too long. This is so that the fundingmanager
-	// isn't held up in the case that the client isn't responding for some reason.
+	// We need to have the stream.Recv() in a goroutine since the call is
+	// blocking and would prevent us from sending more OpenChannelRequests to
+	// the RPC client.
 	go func() {
-		defer predicate.UnregisterClient()
-		defer close(acceptorClient.recvChan)
+		defer rpcAcceptor.UnregisterClient()
 		for {
 			resp, err := stream.Recv()
-			if err == io.EOF {
-				// Send the shutdown request to the send loop.
+			if err != nil {
 				select {
 				case errChan <- err:
-				default:
-					close(predChan)
-				}
-				return
-			} else if err != nil {
-				// Send the shutdown request to the send loop.
-				select {
-				case errChan <- err:
-				default:
-					close(predChan)
+				case <-r.quit:
 				}
 				return
 			}
 
-			// Now that we have the response from the client, attempt to
-			// send it to the recvChan. If we can't send it, shutdown the
-			// send loop.
+			var pendingID [32]byte
+			copy(pendingID[:], resp.PendingChanId)
+
+			openChanResp := channelacceptor.OpenChannelResponse{
+				Accept:           resp.Accept,
+				PendingChannelID: pendingID,
+			}
+
+			// Now that we have the response from the RPC client, send it to
+			// the acceptorClient's RecvChan.
 			select {
-			case acceptorClient.recvChan <- resp.Accept:
-			default:
-				// Send the shutdown request to the send loop. We only send
-				// to the errChan here because it is possible that the client
-				// sent bytes on the stream that wasn't in response to a channel
-				// request. In that case, the sending loop will not be listening
-				// for the close of predChan and won't terminate gracefully.
-				select {
-				case errChan <- nil:
-				default:
-					close(predChan)
-				}
+			case acceptorClient.RecvChan <- openChanResp:
+			case <-r.quit:
 				return
 			}
-
-			// We have successfully sent the response from the client, now
-			// attempt to signal to the sender loop that we have done so.
-			// If we can't signal, shutdown the send loop.
-			select {
-			case predChan <- struct{}{}:
-			default:
-				// Send the shutdown request to the send loop.
-				close(predChan)
-				return
-			}
-
 		}
 	}()
 
 	for {
 		select {
-		case <-r.quit:
-			return nil
-		case err := <-errChan:
-			rpcsLog.Errorf("Received an error: %v, shutting down", err)
-			return err
-		case req := <-acceptorClient.sendChan:
+		case req := <-acceptorClient.SendChan:
 			// An OpenChannelRequest has been received, send it to the client.
-
 			chanAcceptReq := &lnrpc.ChannelAcceptRequest{
-				NodePubkey:       req.node.SerializeCompressed(),
-				ChainHash:        req.openChanMsg.ChainHash[:],
-				PendingChanId:    req.openChanMsg.PendingChannelID[:],
-				FundingAmt:       int64(req.openChanMsg.FundingAmount),
-				PushAmt:          int64(req.openChanMsg.PushAmount),
-				DustLimit:        int64(req.openChanMsg.DustLimit),
-				MaxValueInFlight: int64(req.openChanMsg.MaxValueInFlight),
-				ChannelReserve:   int64(req.openChanMsg.ChannelReserve),
-				MinHtlc:          int64(req.openChanMsg.HtlcMinimum),
-				FeePerKw:         int64(req.openChanMsg.FeePerKiloWeight),
-				CsvDelay:         uint32(req.openChanMsg.CsvDelay),
-				MaxAcceptedHtlcs: uint32(req.openChanMsg.MaxAcceptedHTLCs),
-				ChannelFlags:     uint32(req.openChanMsg.ChannelFlags),
+				NodePubkey:       req.Node.SerializeCompressed(),
+				ChainHash:        req.OpenChanMsg.ChainHash[:],
+				PendingChanId:    req.OpenChanMsg.PendingChannelID[:],
+				FundingAmt:       int64(req.OpenChanMsg.FundingAmount),
+				PushAmt:          int64(req.OpenChanMsg.PushAmount),
+				DustLimit:        int64(req.OpenChanMsg.DustLimit),
+				MaxValueInFlight: int64(req.OpenChanMsg.MaxValueInFlight),
+				ChannelReserve:   int64(req.OpenChanMsg.ChannelReserve),
+				MinHtlc:          int64(req.OpenChanMsg.HtlcMinimum),
+				FeePerKw:         int64(req.OpenChanMsg.FeePerKiloWeight),
+				CsvDelay:         uint32(req.OpenChanMsg.CsvDelay),
+				MaxAcceptedHtlcs: uint32(req.OpenChanMsg.MaxAcceptedHTLCs),
+				ChannelFlags:     uint32(req.OpenChanMsg.ChannelFlags),
 			}
 
 			if err := stream.Send(chanAcceptReq); err != nil {
 				return err
 			}
-
-		sendLoop:
-			for {
-				select {
-				case _, ok := <-predChan:
-					if !ok {
-						// The predChan was closed, so we can exit here.
-						return nil
-					}
-
-					// The stream receive loop has signalled that it has
-					// received an item from the stream and will bubble it up.
-					// We can break the for loop here.
-					break sendLoop
-				case <-time.After(15 * time.Second):
-
-					// Receiving on the stream has taken too long, return.
-					rpcsLog.Errorf("Stream receive loop hasn't responded, " +
-						"shutting down.")
-					return errors.New("client waited too long to respond")
-				}
-			}
+		case err := <-errChan:
+			rpcsLog.Errorf("Received an error: %v, shutting down", err)
+			return err
+		case <-r.quit:
+			return nil
 		}
 	}
 }

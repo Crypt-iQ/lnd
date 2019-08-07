@@ -15,6 +15,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/chainntnfs"
+	"github.com/lightningnetwork/lnd/channelacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/discovery"
 	"github.com/lightningnetwork/lnd/htlcswitch"
@@ -216,8 +217,8 @@ func newSerializedKey(pubKey *btcec.PublicKey) serializedPubKey {
 }
 
 // fundingConfig defines the configuration for the FundingManager. All elements
-// within the configuration besides OpenChannelPredicate MUST be non-nil for the
-// FundingManager to carry out its duties.
+// within the configuration MUST be non-nil for the FundingManager to carry out
+// its duties.
 type fundingConfig struct {
 	// IDKey is the PublicKey that is used to identify this node within the
 	// Lightning Network.
@@ -352,7 +353,7 @@ type fundingConfig struct {
 	// OpenChannelPredicate is a predicate on the lnwire.OpenChannel message
 	// and on the requesting node's public key that returns a bool which tells
 	// the funding manager whether or not to accept the channel.
-	OpenChannelPredicate ChannelAcceptor
+	OpenChannelPredicate channelacceptor.ChannelAcceptor
 }
 
 // fundingManager acts as an orchestrator/bridge between the wallet's
@@ -491,6 +492,20 @@ func (f *fundingManager) Start() error {
 
 func (f *fundingManager) start() error {
 	fndgLog.Tracef("Funding manager running")
+
+	// If the OpenChannelPredicate is the ChainedAcceptor, locate the RPCAcceptor
+	// and start it.
+	openChanPredicate := f.cfg.OpenChannelPredicate
+	chainedAcceptor, ok := openChanPredicate.(*channelacceptor.ChainedAcceptor)
+	if ok {
+		for _, acceptor := range chainedAcceptor.Acceptors {
+			rpcAcceptor, ok := acceptor.(*channelacceptor.RPCAcceptor)
+			if ok {
+				rpcAcceptor.Start()
+				break
+			}
+		}
+	}
 
 	// Upon restart, the Funding Manager will check the database to load any
 	// channels that were  waiting for their funding transactions to be
@@ -742,6 +757,20 @@ func (f *fundingManager) Stop() error {
 
 func (f *fundingManager) stop() error {
 	fndgLog.Infof("Funding manager shutting down")
+
+	// If the OpenChannelPredicate is the ChainedAcceptor, locate the RPCAcceptor
+	// and stop it.
+	openChanPredicate := f.cfg.OpenChannelPredicate
+	chainedAcceptor, ok := openChanPredicate.(*channelacceptor.ChainedAcceptor)
+	if ok {
+		for _, acceptor := range chainedAcceptor.Acceptors {
+			rpcAcceptor, ok := acceptor.(*channelacceptor.RPCAcceptor)
+			if ok {
+				rpcAcceptor.Stop()
+				break
+			}
+		}
+	}
 
 	close(f.quit)
 	f.wg.Wait()
@@ -1077,7 +1106,12 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 		return
 	}
 
-	if !f.cfg.OpenChannelPredicate.Accept(fmsg.peer.IdentityKey(), fmsg.msg) {
+	chanReq := &channelacceptor.OpenChannelRequest{
+		Node:        fmsg.peer.IdentityKey(),
+		OpenChanMsg: fmsg.msg,
+	}
+
+	if !f.cfg.OpenChannelPredicate.Accept(chanReq) {
 		f.failFundingFlow(
 			fmsg.peer, fmsg.msg.PendingChannelID,
 			fmt.Errorf("Open channel request rejected"))

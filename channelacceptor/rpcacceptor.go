@@ -33,9 +33,6 @@ type ChanAcceptorClient struct {
 // RPCAcceptor represents the RPC-controlled variant of the ChannelAcceptor.
 // Only one RPC client is currently allowed at a time.
 type RPCAcceptor struct {
-	started sync.Once
-	stopped sync.Once
-
 	clientMtx sync.Mutex
 	client    *ChanAcceptorClient
 
@@ -106,16 +103,9 @@ func (r *RPCAcceptor) UnregisterClient() {
 
 // Start starts the RPCAcceptor and allows the RPC server to register clients.
 func (r *RPCAcceptor) Start() error {
-	var err error
-	r.started.Do(func() {
-		err = r.start()
-	})
-	return err
-}
-
-func (r *RPCAcceptor) start() error {
 	r.acceptChan = make(chan *OpenChannelRequest)
 	r.acceptClients = make(map[[32]byte]chan bool)
+	r.quit = make(chan struct{})
 
 	r.wg.Add(1)
 	go r.processRequests()
@@ -125,14 +115,6 @@ func (r *RPCAcceptor) start() error {
 
 // Stop stops the RPCAcceptor.
 func (r *RPCAcceptor) Stop() error {
-	var err error
-	r.stopped.Do(func() {
-		err = r.stop()
-	})
-	return err
-}
-
-func (r *RPCAcceptor) stop() error {
 	close(r.quit)
 	r.wg.Wait()
 

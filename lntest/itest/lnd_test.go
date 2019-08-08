@@ -13935,12 +13935,14 @@ func respondChannelAccept(predStream lnrpc.Lightning_ChannelAcceptorClient,
 	response *lnrpc.ChannelAcceptResponse, t *harnessTest) {
 	go func() {
 		// Opening the channel should send a *lnrpc.ChannelAcceptRequest to the stream.
-		if _, err := predStream.Recv(); err != nil {
+		req, err := predStream.Recv()
+		if err != nil {
 			t.Fatalf("unable to receive open channel request: %v", err)
 		}
 
 		// If a response was passed, we send it to the stream.
 		if response != nil {
+			response.PendingChanId = req.PendingChanId
 			if err := predStream.Send(response); err != nil {
 				t.Fatalf("unable to accept open channel request: %v", err)
 			}

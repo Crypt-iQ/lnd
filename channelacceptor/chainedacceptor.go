@@ -7,7 +7,7 @@ type ChainedAcceptor struct {
 	Acceptors []ChannelAcceptor
 }
 
-// Accept evaluates the results of all Acceptors and returns the bitwise AND
+// Accept evaluates the results of all Acceptors and returns the conjunction
 // of all of these predicates.
 func (c *ChainedAcceptor) Accept(req *OpenChannelRequest) bool {
 	result := true

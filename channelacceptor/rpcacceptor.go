@@ -128,6 +128,12 @@ func (r *RPCAcceptor) Stop() error {
 func (r *RPCAcceptor) processRequests() {
 	defer r.wg.Done()
 	for {
+		select {
+		case <-r.quit:
+			return
+		default:
+		}
+
 		// If a client does not exist, continue.
 		if !r.active() {
 			continue

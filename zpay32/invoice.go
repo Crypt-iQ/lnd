@@ -553,6 +553,11 @@ func validateInvoice(invoice *Invoice) error {
 	return nil
 }
 
+// ParseD wrapper for parseData...
+func ParseD(invoice *Invoice, data []byte, net *chaincfg.Params) error {
+	return parseData(invoice, data, net)
+}
+
 // parseData parses the data part of the invoice. It expects base32 data
 // returned from the bech32.Decode method, except signature.
 func parseData(invoice *Invoice, data []byte, net *chaincfg.Params) error {

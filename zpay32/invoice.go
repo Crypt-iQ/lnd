@@ -520,10 +520,10 @@ func validateInvoice(invoice *Invoice) error {
 
 	// We'll restrict invoices to include up to 20 different private route
 	// hints. We do this to avoid overly large invoices.
-	if len(invoice.RouteHints) > 20 {
-		return fmt.Errorf("too many private routes: %d",
-			len(invoice.RouteHints))
-	}
+	// if len(invoice.RouteHints) > 20 {
+	// 	return fmt.Errorf("too many private routes: %d",
+	// 		len(invoice.RouteHints))
+	// }
 
 	// Each route hint can have at most 20 hops.
 	for i, routeHint := range invoice.RouteHints {
@@ -1070,6 +1070,21 @@ func writeTaggedFields(bufferBase32 *bytes.Buffer, invoice *Invoice) error {
 			return err
 		}
 	}
+
+	// Super long "feature vector..." :)
+	// vectorLen := lnwire.SerSize()
+
+	// var b bytes.Buffer
+	// err := lnwire.EncB32(&b, vectorLen, 5)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// err = writeTaggedField(bufferBase32, fieldType9, b.Bytes())
+	// if err != nil {
+	// 	return err
+	// }
+
 	if invoice.Features != nil && invoice.Features.SerializeSize32() > 0 {
 		var b bytes.Buffer
 		err := invoice.Features.RawFeatureVector.EncodeBase32(&b)

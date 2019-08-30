@@ -172,6 +172,38 @@ func (fv *RawFeatureVector) Encode(w io.Writer) error {
 	return fv.encode(w, length, 8)
 }
 
+// SerSize ...
+func SerSize() int {
+	// mock SerializeSize impl
+	max := -1
+	width := 5
+	for feature := 0; feature < 5000; feature++ {
+		index := int(feature)
+		if index > max {
+			max = index
+		}
+	}
+	if max == -1 {
+		return 0
+	}
+
+	return max/width + 1
+}
+
+// EncB32 ...
+func EncB32(w io.Writer, length, width int) error {
+	// Generate the data and write it.
+	data := make([]byte, length)
+	for feature := 0; feature < 5000; feature++ {
+		byteIndex := int(feature) / width
+		bitIndex := int(feature) % width
+		data[length-byteIndex-1] |= 1 << uint(bitIndex)
+	}
+
+	_, err := w.Write(data)
+	return err
+}
+
 // EncodeBase32 writes the feature vector in base32 representation. Every feature
 // encoded as a bit, and the bit vector is serialized using the least number of
 // bytes.

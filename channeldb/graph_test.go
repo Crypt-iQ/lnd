@@ -2,6 +2,7 @@ package channeldb
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"image/color"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"reflect"
 	"runtime"
+	"sort"
 	"testing"
 	"time"
 
@@ -2759,6 +2761,93 @@ func TestDisabledChannelIDs(t *testing.T) {
 	if len(disabledChanIds) > 0 {
 		t.Fatalf("expected empty disabled channels, got %v disabled channels",
 			len(disabledChanIds))
+	}
+}
+
+type entry struct {
+	key   [32]byte
+	value [4]byte
+}
+
+type a []*entry
+
+func (v a) Len() int {
+	return len(v)
+}
+
+func (v a) Less(i, j int) bool {
+	return bytes.Compare(v[i].key[:], v[j].key[:]) < 0
+}
+
+func (v a) Swap(i, j int) {
+	v[i], v[j] = v[j], v[i]
+}
+
+// TestBucketMem ...
+func TestBucketMem(t *testing.T) {
+	// Open the database.
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	if err != nil {
+		t.Fatalf("unable to make test database: %v", err)
+	}
+
+	// Create the "stuff" bucket
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		bucket, err := tx.CreateBucket([]byte("stuff"))
+		if err != nil {
+			return err
+		}
+		if _, err := bucket.CreateBucket([]byte("more")); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const numEntries = 1500000
+	entries := a(make([]*entry, 0, numEntries))
+
+	// generate random bytes???
+	for i := 0; i < numEntries; i++ {
+		var e entry
+		rand.Read(e.key[:4])
+		rand.Read(e.value[:4])
+		// binary.BigEndian.PutUint32(e.key[:4], uint32(i))
+		// binary.BigEndian.PutUint32(e.value[:4], uint32(i))
+		entries = append(entries, &e)
+	}
+
+	// Now, try many 2k transactions vs 6 100k transactions
+	const batchSize = 100000
+	const iter = numEntries / batchSize
+
+	for j := 0; j < iter; j++ {
+		// Each iteration is one TX for batchSize
+
+		start := j * batchSize
+		end := (j + 1) * batchSize
+
+		sort.Sort(entries[start:end])
+
+		if err := db.Update(func(tx *bbolt.Tx) error {
+			z := tx.Bucket([]byte("stuff"))
+			b := z.Bucket([]byte("more"))
+
+			for k := 0; k < batchSize; k++ {
+				index := j*batchSize + k
+				e := entries[index]
+				if err := b.Put(e.key[:], e.value[:]); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -37,7 +37,7 @@ func FuzzUint16(data []byte) int {
 		return 0
 	}
 
-	if val1 != val2 {
+	if val != val2 {
 		panic("values not equal")
 	}
 

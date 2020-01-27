@@ -13,9 +13,10 @@ func FuzzUint16(data []byte) int {
 	r := bytes.NewReader(data)
 
 	var (
-		val uint16
-		buf [8]byte
-		b   bytes.Buffer
+		val  uint16
+		val2 uint16
+		buf  [8]byte
+		b    bytes.Buffer
 	)
 
 	if err := lndtlv.DUint16(r, &val, &buf, 2); err != nil {
@@ -27,7 +28,17 @@ func FuzzUint16(data []byte) int {
 	}
 
 	if !bytes.Equal(b.Bytes(), data) {
+		panic("bytes not equal")
+	}
+
+	r2 := bytes.NewReader(b.Bytes())
+
+	if err := lndtlv.DUint16(r2, &val2, &buf, 2); err != nil {
 		return 0
+	}
+
+	if val1 != val2 {
+		panic("values not equal")
 	}
 
 	return 1

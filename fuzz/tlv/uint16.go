@@ -10,6 +10,10 @@ import (
 
 // FuzzUint16 is used by go-fuzz.
 func FuzzUint16(data []byte) int {
+	if len(data) > 2 {
+		return -1
+	}
+
 	r := bytes.NewReader(data)
 
 	var (

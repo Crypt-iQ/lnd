@@ -10,6 +10,10 @@ import (
 
 // FuzzUint8 is used by go-fuzz.
 func FuzzUint8(data []byte) int {
+	if len(data) > 1 {
+		return -1
+	}
+
 	r := bytes.NewReader(data)
 
 	var (

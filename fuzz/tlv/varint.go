@@ -8,8 +8,8 @@ import (
 	lndtlv "github.com/lightningnetwork/lnd/tlv"
 )
 
-// FuzzVarInt ...
-func FuzzVarInt(data []byte) int {
+// Fuzz_varint is used by go-fuzz.
+func Fuzz_varint(data []byte) int {
 	r := bytes.NewReader(data)
 
 	var (
@@ -29,9 +29,8 @@ func FuzzVarInt(data []byte) int {
 		return 0
 	}
 
-	if !bytes.Equal(b.Bytes(), data) {
-		panic("bytes not equal")
-	}
+	// A byte comparison isn't performed here since ReadVarInt doesn't read
+	// all of the bytes from data and so b.Bytes() won't be equal to data.
 
 	r2 := bytes.NewReader(b.Bytes())
 

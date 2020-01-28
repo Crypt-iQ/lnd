@@ -21,7 +21,6 @@ func FuzzStream(data []byte) int {
 		val7 *btcec.PublicKey
 		val8 [64]byte
 		val9 []byte
-		b    bytes.Buffer
 
 		val10 uint8
 		val11 uint16
@@ -32,6 +31,8 @@ func FuzzStream(data []byte) int {
 		val16 *btcec.PublicKey
 		val17 [64]byte
 		val18 []byte
+
+		b bytes.Buffer
 	)
 
 	stream := lndtlv.MustNewStream(

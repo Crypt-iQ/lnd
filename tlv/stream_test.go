@@ -2,6 +2,7 @@ package tlv_test
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -13,6 +14,52 @@ type parsedTypeTest struct {
 	encode         []tlv.Type
 	decode         []tlv.Type
 	expParsedTypes tlv.TypeMap
+}
+
+// TestMem tests how much memory is allocated when forcing the stream to decode
+// a lot of single-byte values. Buffers are usually grown to larger than their
+// assigned value in some functions so we should get some MB even with a max
+// payload length of 65KB!
+func TestMem(t *testing.T) {
+	// Create a new stream from []Record.
+	decRecords := make([]tlv.Record, 0, 1)
+	decRecords = append(decRecords, tlv.MakePrimitiveRecord(10001, new(uint64)))
+	decStream := tlv.MustNewStream(decRecords...)
+
+	// Create a serialized stream.
+	encRecords := make([]tlv.Record, 0, 10000)
+	for i := 0; i < 10000; i++ {
+		encRecords = append(encRecords, tlv.MakePrimitiveRecord(tlv.Type(i), new(uint16)))
+	}
+
+	// One large payload allocates less memory than the above
+	// encRecords := make([]tlv.Record, 0, 1)
+	// var a [65530]byte
+	// var c []byte
+	// c = a[:]
+	// encRecords = append(encRecords, tlv.MakePrimitiveRecord(tlv.Type(0), &c))
+
+	encStream := tlv.MustNewStream(encRecords...)
+	var b bytes.Buffer
+	if err := encStream.Encode(&b); err != nil {
+		panic(err)
+	}
+
+	// Size of payload
+	fmt.Println(len(b.Bytes()))
+
+	// Big alloc decode
+	_, err := decStream.DecodeWithParsedTypes(
+		bytes.NewReader(b.Bytes()),
+	)
+
+	// Low alloc decode
+	// err := decStream.Decode(
+	// 	bytes.NewReader(b.Bytes()),
+	// )
+	if err != nil {
+		panic(err)
+	}
 }
 
 // TestParsedTypes asserts that a Stream will properly return the set of types

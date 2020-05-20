@@ -617,6 +617,20 @@ service Lightning {
         };
     };
 
+    /** lncli: `delete-failed-payment`
+    DeleteFailedPayment deletes a specified payment from the DB.
+    */
+    rpc DeleteFailedPayment (DeleteFailedPaymentRequest) returns (DeleteFailedPaymentResponse) {
+        //
+    };
+
+    /** lncli: `delete-all-failed-payments`
+    DeleteAllFailedPayments deletes all failed payments from DB.
+    */
+    rpc DeleteAllFailedPayments (DeleteAllFailedPaymentsRequest) returns (DeleteAllFailedPaymentsResponse) {
+        //
+    };
+
     /** lncli: `describegraph`
     DescribeGraph returns a description of the latest graph state from the
     point of view of the node. The graph information is partitioned into two
@@ -2804,6 +2818,18 @@ message DeleteAllPaymentsRequest {
 }
 
 message DeleteAllPaymentsResponse {
+}
+
+message DeleteFailedPaymentRequest {
+}
+
+message DeleteFailedPaymentResponse {
+}
+
+message DeleteAllFailedPaymentsRequest {
+}
+
+message DeleteAllFailedPaymentsResponse {
 }
 
 message AbandonChannelRequest {

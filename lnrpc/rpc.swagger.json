@@ -2293,7 +2293,13 @@
         }
       }
     },
+    "lnrpcDeleteAllFailedPaymentsResponse": {
+      "type": "object"
+    },
     "lnrpcDeleteAllPaymentsResponse": {
+      "type": "object"
+    },
+    "lnrpcDeleteFailedPaymentResponse": {
       "type": "object"
     },
     "lnrpcDisconnectPeerResponse": {

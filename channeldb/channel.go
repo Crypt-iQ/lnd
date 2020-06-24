@@ -72,6 +72,11 @@ var (
 	// for in one of our remote commits.
 	unsignedAckedUpdatesKey = []byte("unsigned-acked-updates-key")
 
+	// peerUnsignedAckedUpdatesKey is an entry in the channel bucket that
+	// contains the local updates that the remote party has acked, but
+	// has not yet signed for in onr of their local commits.
+	peerUnsignedAckedUpdatesKey = []byte("peer-unsigned-acked-updates-key")
+
 	// revocationStateKey stores their current revocation hash, our
 	// preimage producer and their preimage store.
 	revocationStateKey = []byte("revocation-state-key")
@@ -1440,6 +1445,38 @@ func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment,
 				"updates: %v", err)
 		}
 
+		// Persist the peer unsigned acked updates that are not included
+		// in our new commitment.
+		updateBytes := chanBucket.Get(peerUnsignedAckedUpdatesKey)
+		if updateBytes == nil {
+			return nil
+		}
+
+		r := bytes.NewReader(updateBytes)
+		updates, err := deserializeLogUpdates(r)
+
+		var validUpdates []LogUpdate
+
+		for _, upd := range updates {
+			lIdx := upd.LogIndex
+
+			// Check if it's not on our local commitment
+			if lIdx >= newCommitment.LocalLogIndex {
+				validUpdates = append(validUpdates, upd)
+			}
+		}
+
+		var b2 bytes.Buffer
+		err = serializeLogUpdates(&b2, validUpdates)
+		if err != nil {
+			return fmt.Errorf("unable to serialize log updates: %v", err)
+		}
+
+		err = chanBucket.Put(peerUnsignedAckedUpdatesKey, b2.Bytes())
+		if err != nil {
+			return fmt.Errorf("unable to restore chanbucket: %v", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -2065,6 +2102,38 @@ func (c *OpenChannel) UnsignedAckedUpdates() ([]LogUpdate, error) {
 	return updates, nil
 }
 
+// PeerUnsignedAckedUpdates retrieves the persisted, unsigned acked local log
+// updates that the peer still needs to sign for.
+func (c *OpenChannel) PeerUnsignedAckedUpdates() ([]LogUpdate, error) {
+	var updates []LogUpdate
+	err := kvdb.View(c.Db, func(tx kvdb.RTx) error {
+		chanBucket, err := fetchChanBucket(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		switch err {
+		case nil:
+		case ErrNoChanDBExists, ErrNoActiveChannels, ErrChannelNotFound:
+			return nil
+		default:
+			return err
+		}
+
+		updateBytes := chanBucket.Get(peerUnsignedAckedUpdatesKey)
+		if updateBytes == nil {
+			return nil
+		}
+
+		r := bytes.NewReader(updateBytes)
+		updates, err = deserializeLogUpdates(r)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return updates, nil
+}
+
 // InsertNextRevocation inserts the _next_ commitment point (revocation) into
 // the database, and also modifies the internal RemoteNextRevocation attribute
 // to point to the passed key. This method is to be using during final channel
@@ -2102,7 +2171,9 @@ func (c *OpenChannel) InsertNextRevocation(revKey *btcec.PublicKey) error {
 // rectify the situation. This method will add the current commitment for the
 // remote party to the revocation log, and promote the current pending
 // commitment to the current remote commitment.
-func (c *OpenChannel) AdvanceCommitChainTail(fwdPkg *FwdPkg) error {
+func (c *OpenChannel) AdvanceCommitChainTail(fwdPkg *FwdPkg,
+	updates []LogUpdate) error {
+
 	c.Lock()
 	defer c.Unlock()
 
@@ -2186,6 +2257,20 @@ func (c *OpenChannel) AdvanceCommitChainTail(fwdPkg *FwdPkg) error {
 		// have not received a corresponding settle/fail.
 		if err := c.Packager.AddFwdPkg(tx, fwdPkg); err != nil {
 			return err
+		}
+
+		// Persist the local updates the peer hasn't yet signed so they
+		// can be restored after restart.
+		var b bytes.Buffer
+		err = serializeLogUpdates(&b, updates)
+		if err != nil {
+			return err
+		}
+
+		err = chanBucket.Put(peerUnsignedAckedUpdatesKey, b.Bytes())
+		if err != nil {
+			return fmt.Errorf("unable to restore local unsigned "+
+				"acked updates: %v", err)
 		}
 
 		newRemoteCommit = &newCommit.Commitment

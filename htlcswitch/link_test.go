@@ -4770,6 +4770,105 @@ func testChannelLinkBatchPreimageWrite(t *testing.T, disconnect bool) {
 	}
 }
 
+// TestChannelFail ...
+func TestChannelFail(t *testing.T) {
+	t.Parallel()
+
+	const chanAmt = btcutil.SatoshiPerBitcoin * 5
+	const chanReserve = btcutil.SatoshiPerBitcoin * 1
+	aliceLink, bobChannel, _, start, cleanUp, restore, err :=
+		newSingleLinkTestHarness(chanAmt, chanReserve)
+	if err != nil {
+		t.Fatalf("unable to create link: %v", err)
+	}
+	defer cleanUp()
+
+	alice := newPersistentLinkHarness(
+		t, aliceLink, nil, restore,
+	)
+
+	if err := start(); err != nil {
+		t.Fatalf("unable to start test harness: %v", err)
+	}
+
+	var (
+		coreLink  = aliceLink.(*channelLink)
+		aliceMsgs = coreLink.cfg.Peer.(*mockPeer).sentMsgs
+		registry  = coreLink.cfg.Registry.(*mockInvoiceRegistry)
+	)
+
+	registry.settleChan = make(chan lntypes.Hash)
+
+	// Settle Alice in hodl ExitSettle mode so that she won't respond
+	// immediately to the htlc's meant for her. This allows us to control
+	// the responses she gives back to Bob.
+	coreLink.cfg.HodlMask = hodl.ExitSettle.Mask()
+
+	// Add an HTLC to Alice's registry, that Bob can pay.
+	htlc1, inv := generateHtlcAndInvoice(t, 0)
+
+	// Add the invoice to Alice's registry, such that Alice expects the
+	// payments.
+	err = registry.AddInvoice(*inv, htlc1.PaymentHash)
+	if err != nil {
+		t.Fatalf("unable to add inv to registry: %v", err)
+	}
+
+	preimage := inv.Terms.PaymentPreimage
+
+	ctx := linkTestContext{
+		t:          t,
+		aliceLink:  aliceLink,
+		aliceMsgs:  aliceMsgs,
+		bobChannel: bobChannel,
+	}
+
+	ctx.sendHtlcBobToAlice(htlc1)
+	ctx.sendCommitSigBobToAlice(1)
+	ctx.receiveRevAndAckAliceToBob()
+	ctx.receiveCommitSigAliceToBob(1)
+	ctx.sendRevAndAckBobToAlice()
+
+	select {
+	case <-registry.settleChan:
+	case <-time.After(15 * time.Second):
+		t.Fatal("exit hop notification not received")
+	}
+
+	registry.SettleHodlInvoice(*preimage)
+
+	ctx.receiveSettleAliceToBob()
+	ctx.receiveCommitSigAliceToBob(0)
+	ctx.sendRevAndAckBobToAlice()
+
+	// wait so it's fully locked-in
+	<-time.After(5 * time.Second)
+
+	alice.restart(false)
+	ctx.aliceLink = alice.link
+	ctx.aliceMsgs = alice.msgs
+
+	<-time.After(5 * time.Second)
+
+	sig, htlcSigs, _, err := bobChannel.SignNextCommitment()
+	if err != nil {
+		t.Fatalf("error signing commitment: %v", err)
+	}
+
+	commitSig := &lnwire.CommitSig{
+		CommitSig: sig,
+		HtlcSigs:  htlcSigs,
+	}
+
+	// Should have no htlcSigs.
+	fmt.Println(spew.Sdump(commitSig))
+
+	// Alice should be unable to receive this commitment.
+	if err := alice.channel.ReceiveNewCommitment(sig, htlcSigs); err != nil {
+		t.Fatalf("err receiving commitment: %v", err)
+	}
+}
+
 // TestChannelLinkCleanupSpuriousResponses tests that we properly cleanup
 // references in the event that internal retransmission continues as a result of
 // not properly cleaning up Add/SettleFailRefs.

@@ -52,6 +52,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/nat"
 	"github.com/lightningnetwork/lnd/netann"
+	ppeer "github.com/lightningnetwork/lnd/peer"
 	"github.com/lightningnetwork/lnd/peernotifier"
 	"github.com/lightningnetwork/lnd/pool"
 	"github.com/lightningnetwork/lnd/queue"
@@ -1480,7 +1481,13 @@ func (s *server) Stop() error {
 		// Disconnect from each active peers to ensure that
 		// peerTerminationWatchers signal completion to each peer.
 		for _, peer := range s.Peers() {
-			s.DisconnectPeer(peer.addr.IdentityKey)
+			err := s.DisconnectPeer(peer.IdentityKey())
+			if err != nil {
+				srvrLog.Errorf("could not disconnect peer: %v"+
+					"received error: %v", peer.IdentityKey(),
+					err,
+				)
+			}
 		}
 
 		// Now that all connections have been torn down, stop the tower
@@ -1819,7 +1826,7 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 			s.mu.RLock()
 			ignoreList := make(map[autopilot.NodeID]struct{})
 			for _, peer := range s.peersByPub {
-				nID := autopilot.NewNodeID(peer.addr.IdentityKey)
+				nID := autopilot.NewNodeID(peer.IdentityKey())
 				ignoreList[nID] = struct{}{}
 			}
 			s.mu.RUnlock()
@@ -2312,9 +2319,9 @@ func (s *server) BroadcastMessage(skips map[route.Vertex]struct{},
 	peers := make([]*peer, 0, len(s.peersByPub))
 	for _, sPeer := range s.peersByPub {
 		if skips != nil {
-			if _, ok := skips[sPeer.pubKeyBytes]; ok {
+			if _, ok := skips[sPeer.PubKey()]; ok {
 				srvrLog.Tracef("Skipping %x in broadcast",
-					sPeer.pubKeyBytes[:])
+					sPeer.PubKey())
 				continue
 			}
 		}
@@ -2564,7 +2571,7 @@ func (s *server) InboundPeerConnected(conn net.Conn) {
 		// we'll close out the new connection s.t there's only a single
 		// connection between us.
 		localPub := s.identityECDH.PubKey()
-		if !connectedPeer.inbound &&
+		if !connectedPeer.cfg.Inbound &&
 			!shouldDropLocalConnection(localPub, nodePub) {
 
 			srvrLog.Warnf("Received inbound connection from "+
@@ -2675,7 +2682,7 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 		// we'll close out the new connection s.t there's only a single
 		// connection between us.
 		localPub := s.identityECDH.PubKey()
-		if connectedPeer.inbound &&
+		if connectedPeer.cfg.Inbound &&
 			shouldDropLocalConnection(localPub, nodePub) {
 
 			srvrLog.Warnf("Established outbound connection to "+
@@ -2785,7 +2792,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	errBuffer, ok := s.peerErrors[pkStr]
 	if !ok {
 		var err error
-		errBuffer, err = queue.NewCircularBuffer(errorBufferSize)
+		errBuffer, err = queue.NewCircularBuffer(ErrorBufferSize)
 		if err != nil {
 			srvrLog.Errorf("unable to create peer %v", err)
 			return
@@ -2798,15 +2805,62 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	// offered that would trigger channel closure. In case of outgoing
 	// htlcs, an extra block is added to prevent the channel from being
 	// closed when the htlc is outstanding and a new block comes in.
-	p, err := newPeer(
-		s.cfg, conn, connReq, s, peerAddr, inbound, initFeatures,
-		legacyFeatures, s.cfg.ChanEnableTimeout,
-		lncfg.DefaultOutgoingCltvRejectDelta, errBuffer,
-	)
-	if err != nil {
-		srvrLog.Errorf("unable to create peer %v", err)
-		return
+	pCfg := ppeer.Config{
+		Conn:                    conn,
+		ConnReq:                 connReq,
+		Addr:                    peerAddr,
+		Inbound:                 inbound,
+		Features:                initFeatures,
+		LegacyFeatures:          legacyFeatures,
+		OutgoingCltvRejectDelta: lncfg.DefaultOutgoingCltvRejectDelta,
+		ChanActiveTimeout:       s.cfg.ChanEnableTimeout,
+		ErrorBuffer:             errBuffer,
+		WritePool:               s.writePool,
+		ReadPool:                s.readPool,
+		Switch:                  s.htlcSwitch,
+		InterceptSwitch:         s.interceptableSwitch,
+		ChannelDB:               s.chanDB,
+		ChainArb:                s.chainArb,
+		AuthGossiper:            s.authGossiper,
+		ChanStatusMgr:           s.chanStatusMgr,
+		ChainIO:                 s.cc.chainIO,
+		FeeEstimator:            s.cc.feeEstimator,
+		Signer:                  s.cc.wallet.Cfg.Signer,
+		SigPool:                 s.sigPool,
+		Wallet:                  s.cc.wallet,
+		ChainNotifier:           s.cc.chainNotifier,
+		RoutingPolicy:           s.cc.routingPolicy,
+		Sphinx:                  s.sphinx,
+		WitnessBeacon:           s.witnessBeacon,
+		Invoices:                s.invoices,
+		ChannelNotifier:         s.channelNotifier,
+		HtlcNotifier:            s.htlcNotifier,
+		TowerClient:             s.towerClient,
+		DisconnectPeer:          s.DisconnectPeer,
+		GenNodeAnnouncement:     s.genNodeAnnouncement,
+
+		PrunePersistentPeerConnection: s.prunePersistentPeerConnection,
+
+		FetchLastChanUpdate:   s.fetchLastChanUpdate(),
+		ProcessFundingOpen:    s.fundingMgr.processFundingOpen,
+		ProcessFundingAccept:  s.fundingMgr.processFundingAccept,
+		ProcessFundingCreated: s.fundingMgr.processFundingCreated,
+		ProcessFundingSigned:  s.fundingMgr.processFundingSigned,
+		ProcessFundingLocked:  s.fundingMgr.processFundingLocked,
+		ProcessFundingError:   s.fundingMgr.processFundingError,
+		IsPendingChannel:      s.fundingMgr.IsPendingChannel,
+
+		Hodl:                    s.cfg.Hodl,
+		UnsafeReplay:            s.cfg.UnsafeReplay,
+		MaxOutgoingCltvExpiry:   s.cfg.MaxOutgoingCltvExpiry,
+		MaxChannelFeeAllocation: s.cfg.MaxChannelFeeAllocation,
+		ServerPubKey:            s.identityECDH.PubKey().SerializeCompressed(),
+		Quit:                    s.quit,
 	}
+
+	copy(pCfg.PubKeyBytes[:], peerAddr.IdentityKey.SerializeCompressed())
+
+	p := newPeer(pCfg)
 
 	// TODO(roasbeef): update IP address for link-node
 	//  * also mark last-seen, do it one single transaction?
@@ -2843,12 +2897,12 @@ func (s *server) addPeer(p *peer) {
 	// TODO(roasbeef): pipe all requests through to the
 	// queryHandler/peerManager
 
-	pubSer := p.addr.IdentityKey.SerializeCompressed()
+	pubSer := p.cfg.Addr.IdentityKey.SerializeCompressed()
 	pubStr := string(pubSer)
 
 	s.peersByPub[pubStr] = p
 
-	if p.inbound {
+	if p.cfg.Inbound {
 		s.inboundPeers[pubStr] = p
 	} else {
 		s.outboundPeers[pubStr] = p
@@ -2904,7 +2958,7 @@ func (s *server) peerInitializer(p *peer) {
 	// was successful, and to begin watching the peer's wait group.
 	close(ready)
 
-	pubStr := string(p.addr.IdentityKey.SerializeCompressed())
+	pubStr := string(p.IdentityKey().SerializeCompressed())
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2951,7 +3005,7 @@ func (s *server) peerTerminationWatcher(p *peer, ready chan struct{}) {
 	// available for use.
 	s.fundingMgr.CancelPeerReservations(p.PubKey())
 
-	pubKey := p.addr.IdentityKey
+	pubKey := p.IdentityKey()
 
 	// We'll also inform the gossiper that this peer is no longer active,
 	// so we don't need to maintain sync state for it any longer.
@@ -2962,13 +3016,13 @@ func (s *server) peerTerminationWatcher(p *peer, ready chan struct{}) {
 	// with this interface should be closed.
 	//
 	// TODO(roasbeef): instead add a PurgeInterfaceLinks function?
-	links, err := p.server.htlcSwitch.GetLinksByInterface(p.pubKeyBytes)
+	links, err := s.htlcSwitch.GetLinksByInterface(p.PubKey())
 	if err != nil && err != htlcswitch.ErrNoLinksFound {
 		srvrLog.Errorf("Unable to get channel links for %v: %v", p, err)
 	}
 
 	for _, link := range links {
-		p.server.htlcSwitch.RemoveLink(link.ChanID())
+		s.htlcSwitch.RemoveLink(link.ChanID())
 	}
 
 	s.mu.Lock()
@@ -3021,12 +3075,12 @@ func (s *server) peerTerminationWatcher(p *peer, ready chan struct{}) {
 		// within the peer's address for reconnection purposes.
 		//
 		// TODO(roasbeef): use them all?
-		if p.inbound {
+		if p.cfg.Inbound {
 			advertisedAddr, err := s.fetchNodeAdvertisedAddr(pubKey)
 			switch {
 			// We found an advertised address, so use it.
 			case err == nil:
-				p.addr.Address = advertisedAddr
+				p.cfg.Addr.Address = advertisedAddr
 
 			// The peer doesn't have an advertised address.
 			case err == errNoAdvertisedAddr:
@@ -3059,7 +3113,7 @@ func (s *server) peerTerminationWatcher(p *peer, ready chan struct{}) {
 		// Otherwise, we'll launch a new connection request in order to
 		// attempt to maintain a persistent connection with this peer.
 		connReq := &connmgr.ConnReq{
-			Addr:      p.addr,
+			Addr:      p.cfg.Addr,
 			Permanent: true,
 		}
 		s.persistentConnReqs[pubStr] = append(
@@ -3114,8 +3168,8 @@ func (s *server) removePeer(p *peer) {
 	p.Disconnect(fmt.Errorf("server: disconnecting peer %v", p))
 
 	// If this peer had an active persistent connection request, remove it.
-	if p.connReq != nil {
-		s.connMgr.Remove(p.connReq.ID())
+	if p.cfg.ConnReq != nil {
+		s.connMgr.Remove(p.cfg.ConnReq.ID())
 	}
 
 	// Ignore deleting peers if we're shutting down.
@@ -3123,12 +3177,13 @@ func (s *server) removePeer(p *peer) {
 		return
 	}
 
-	pubSer := p.addr.IdentityKey.SerializeCompressed()
+	pKey := p.PubKey()
+	pubSer := pKey[:]
 	pubStr := string(pubSer)
 
 	delete(s.peersByPub, pubStr)
 
-	if p.inbound {
+	if p.cfg.Inbound {
 		delete(s.inboundPeers, pubStr)
 	} else {
 		delete(s.outboundPeers, pubStr)
@@ -3136,8 +3191,8 @@ func (s *server) removePeer(p *peer) {
 
 	// Copy the peer's error buffer across to the server if it has any items
 	// in it so that we can restore peer errors across connections.
-	if p.errorBuffer.Total() > 0 {
-		s.peerErrors[pubStr] = p.errorBuffer
+	if p.cfg.ErrorBuffer.Total() > 0 {
+		s.peerErrors[pubStr] = p.cfg.ErrorBuffer
 	}
 
 	// Inform the peer notifier of a peer offline event so that it can be

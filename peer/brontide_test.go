@@ -1,6 +1,4 @@
-// +build !rpctest
-
-package lnd
+package peer
 
 import (
 	"bytes"
@@ -14,7 +12,6 @@ import (
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwallet/chancloser"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
@@ -36,7 +33,7 @@ var (
 func TestPeerChannelClosureAcceptFeeResponder(t *testing.T) {
 	t.Parallel()
 
-	notifier := &mockNotfier{
+	notifier := &mockNotifier{
 		confChannel: make(chan *chainntnfs.TxConfirmation),
 	}
 	broadcastTxChan := make(chan *wire.MsgTx)
@@ -137,7 +134,7 @@ func TestPeerChannelClosureAcceptFeeResponder(t *testing.T) {
 func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 	t.Parallel()
 
-	notifier := &mockNotfier{
+	notifier := &mockNotifier{
 		confChannel: make(chan *chainntnfs.TxConfirmation),
 	}
 	broadcastTxChan := make(chan *wire.MsgTx)
@@ -230,7 +227,6 @@ func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 	}
 
 	// Alice should respond with the ClosingSigned they both agreed upon.
-
 	select {
 	case outMsg := <-alicePeer.outgoingQueue:
 		msg = outMsg.msg
@@ -238,14 +234,14 @@ func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 		t.Fatalf("did not receive closing signed message")
 	}
 
-	closingSignedMsg, ok := msg.(*lnwire.ClosingSigned)
+	closingSignedMsg, ok = msg.(*lnwire.ClosingSigned)
 	if !ok {
 		t.Fatalf("expected ClosingSigned message, got %T", msg)
 	}
 
-	if closingSignedMsg.FeeSatoshis != fee {
+	if closingSignedMsg.FeeSatoshis != bobFee {
 		t.Fatalf("expected ClosingSigned fee to be %v, instead got %v",
-			fee, closingSignedMsg.FeeSatoshis)
+			bobFee, closingSignedMsg.FeeSatoshis)
 	}
 
 	// Alice should be waiting on a single confirmation for the coop close tx.
@@ -258,7 +254,7 @@ func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 func TestPeerChannelClosureFeeNegotiationsResponder(t *testing.T) {
 	t.Parallel()
 
-	notifier := &mockNotfier{
+	notifier := &mockNotifier{
 		confChannel: make(chan *chainntnfs.TxConfirmation),
 	}
 	broadcastTxChan := make(chan *wire.MsgTx)
@@ -450,7 +446,7 @@ func TestPeerChannelClosureFeeNegotiationsResponder(t *testing.T) {
 func TestPeerChannelClosureFeeNegotiationsInitiator(t *testing.T) {
 	t.Parallel()
 
-	notifier := &mockNotfier{
+	notifier := &mockNotifier{
 		confChannel: make(chan *chainntnfs.TxConfirmation),
 	}
 	broadcastTxChan := make(chan *wire.MsgTx)
@@ -783,7 +779,7 @@ func TestCustomShutdownScript(t *testing.T) {
 		test := test
 
 		t.Run(test.name, func(t *testing.T) {
-			notifier := &mockNotfier{
+			notifier := &mockNotifier{
 				confChannel: make(chan *chainntnfs.TxConfirmation),
 			}
 			broadcastTxChan := make(chan *wire.MsgTx)

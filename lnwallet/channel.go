@@ -1567,6 +1567,10 @@ func (lc *LightningChannel) remoteLogUpdateToPayDesc(logUpdate *channeldb.LogUpd
 	case *lnwire.UpdateFulfillHTLC:
 		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
 
+		if ogHTLC.addCommitHeightLocal == 0 {
+			ogHTLC.addCommitHeightLocal = commitHeight - 1
+		}
+
 		return &PaymentDescriptor{
 			Amount:                  ogHTLC.Amount,
 			RHash:                   ogHTLC.RHash,
@@ -1583,6 +1587,10 @@ func (lc *LightningChannel) remoteLogUpdateToPayDesc(logUpdate *channeldb.LogUpd
 	case *lnwire.UpdateFailHTLC:
 		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
 
+		if ogHTLC.addCommitHeightLocal == 0 {
+			ogHTLC.addCommitHeightLocal = commitHeight - 1
+		}
+
 		return &PaymentDescriptor{
 			Amount:                  ogHTLC.Amount,
 			RHash:                   ogHTLC.RHash,
@@ -1597,6 +1605,10 @@ func (lc *LightningChannel) remoteLogUpdateToPayDesc(logUpdate *channeldb.LogUpd
 	// way as regular HTLC fails.
 	case *lnwire.UpdateFailMalformedHTLC:
 		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
+
+		if ogHTLC.addCommitHeightLocal == 0 {
+			ogHTLC.addCommitHeightLocal = commitHeight - 1
+		}
 
 		return &PaymentDescriptor{
 			Amount:                  ogHTLC.Amount,

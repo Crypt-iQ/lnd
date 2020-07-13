@@ -1852,6 +1852,7 @@ func (lc *LightningChannel) restoreStateLogs(
 	// in our next signature.
 	err := lc.restorePendingRemoteUpdates(
 		unsignedAckedUpdates, localCommitment.height,
+		pendingRemoteCommit,
 	)
 	if err != nil {
 		return err
@@ -1864,7 +1865,8 @@ func (lc *LightningChannel) restoreStateLogs(
 // haven't yet signed for.
 func (lc *LightningChannel) restorePendingRemoteUpdates(
 	unsignedAckedUpdates []channeldb.LogUpdate,
-	localCommitmentHeight uint64) error {
+	localCommitmentHeight uint64,
+	pendingRemoteCommit *commitment) error {
 
 	lc.log.Debugf("Restoring %v dangling remote updates",
 		len(unsignedAckedUpdates))
@@ -1879,12 +1881,38 @@ func (lc *LightningChannel) restorePendingRemoteUpdates(
 			return err
 		}
 
+		logIdx := payDesc.LogIndex
+
 		// Sanity check that we are not restoring a remote log update
 		// that we haven't received a sig for.
-		if payDesc.LogIndex >= lc.remoteUpdateLog.logIndex {
+		if logIdx >= lc.remoteUpdateLog.logIndex {
 			return fmt.Errorf("attempted to restore an "+
 				"unsigned remote update: log_index=%v",
-				payDesc.LogIndex)
+				logIdx)
+		}
+
+		// We previously restored Adds along with all the other upates,
+		// but this Add restoration was a no-op as every single one of
+		// these Adds was already restored since they're all incoming
+		// htlcs on the local commitment.
+		if payDesc.EntryType == Add {
+			continue
+		}
+
+		var (
+			height    uint64
+			heightSet bool
+		)
+
+		// If we have a pending commitment for them, and this update
+		// is included in that commit, then we'll use this commitment
+		// height as this commitment will include these updates for
+		// their new remote commitment.
+		if pendingRemoteCommit != nil {
+			if logIdx < pendingRemoteCommit.theirMessageIndex {
+				height = pendingRemoteCommit.height
+				heightSet = true
+			}
 		}
 
 		// Insert the update into the log. The log update index doesn't
@@ -1892,23 +1920,20 @@ func (lc *LightningChannel) restorePendingRemoteUpdates(
 		// final value was properly persisted with the last local
 		// commitment update.
 		switch payDesc.EntryType {
-		case Add:
-			lc.remoteUpdateLog.restoreHtlc(payDesc)
-
-			// Sanity check to be sure that we are not restoring an
-			// add update that the remote hasn't signed for yet.
-			if payDesc.HtlcIndex >= lc.remoteUpdateLog.htlcCounter {
-				return fmt.Errorf("attempted to restore an "+
-					"unsigned remote htlc: htlc_index=%v",
-					payDesc.HtlcIndex)
+		case FeeUpdate:
+			if heightSet {
+				payDesc.addCommitHeightRemote = height
+				payDesc.removeCommitHeightRemote = height
 			}
 
-		case FeeUpdate:
 			lc.remoteUpdateLog.restoreUpdate(payDesc)
 
 		default:
-			lc.remoteUpdateLog.restoreUpdate(payDesc)
+			if heightSet {
+				payDesc.removeCommitHeightRemote = height
+			}
 
+			lc.remoteUpdateLog.restoreUpdate(payDesc)
 			lc.localUpdateLog.markHtlcModified(payDesc.ParentIndex)
 		}
 	}

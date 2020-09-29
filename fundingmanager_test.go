@@ -21,8 +21,9 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	
 	"github.com/lightningnetwork/lnd/lncfg"
-
+	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/chanacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -104,7 +105,7 @@ var (
 	_, _ = testSig.R.SetString("63724406601629180062774974542967536251589935445068131219452686511677818569431", 10)
 	_, _ = testSig.S.SetString("18801056069249825825291287104931333862866033135609736119018462340006816851118", 10)
 
-	fundingNetParams = bitcoinTestNetParams
+	fundingNetParams = chainreg.BitcoinTestNetParams
 )
 
 type mockNotifier struct {

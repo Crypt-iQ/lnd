@@ -644,7 +644,7 @@ type ChainRegistry struct {
 }
 
 // NewChainRegistry creates a new ChainRegistry.
-func NewChainRegistry() *chainRegistry {
+func NewChainRegistry() *ChainRegistry {
 	return &ChainRegistry{
 		activeChains: make(map[chainreg.ChainCode]*ChainControl),
 		netParams:    make(map[chainreg.ChainCode]*chainreg.BitcoinNetParams),

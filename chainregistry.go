@@ -36,6 +36,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/chainview"
+	"github.com/lightningnetwork/lnd/tor"
 )
 
 const (
@@ -725,9 +726,11 @@ func (c *ChainRegistry) NumActiveChains() uint32 {
 	return uint32(len(c.activeChains))
 }
 
-// initNeutrinoBackend inits a new instance of the neutrino light client
+// InitNeutrinoBackend inits a new instance of the neutrino light client
 // backend given a target chain directory to store the chain state.
-func initNeutrinoBackend(cfg *Config, chainDir string) (*neutrino.ChainService,
+func InitNeutrinoBackend(cfg *lncfg.Neutrino, tornet tor.Net,
+	syncFreelist bool, chainDir string,
+	netParams chainreg.BitcoinNetParams) (*neutrino.ChainService,
 	func(), error) {
 
 	// First we'll open the database file for neutrino, creating the
@@ -735,7 +738,7 @@ func initNeutrinoBackend(cfg *Config, chainDir string) (*neutrino.ChainService,
 	// match the behavior of btcwallet.
 	dbPath := filepath.Join(
 		chainDir,
-		lncfg.NormalizeNetwork(cfg.ActiveNetParams.Name),
+		lncfg.NormalizeNetwork(netParams.Name),
 	)
 
 	// Ensure that the neutrino db path exists.
@@ -744,14 +747,14 @@ func initNeutrinoBackend(cfg *Config, chainDir string) (*neutrino.ChainService,
 	}
 
 	dbName := filepath.Join(dbPath, "neutrino.db")
-	db, err := walletdb.Create("bdb", dbName, !cfg.SyncFreelist)
+	db, err := walletdb.Create("bdb", dbName, !syncFreelist)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to create neutrino "+
 			"database: %v", err)
 	}
 
 	headerStateAssertion, err := parseHeaderStateAssertion(
-		cfg.NeutrinoMode.AssertFilterHeader,
+		cfg.AssertFilterHeader,
 	)
 	if err != nil {
 		db.Close()
@@ -764,17 +767,17 @@ func initNeutrinoBackend(cfg *Config, chainDir string) (*neutrino.ChainService,
 	config := neutrino.Config{
 		DataDir:      dbPath,
 		Database:     db,
-		ChainParams:  *cfg.ActiveNetParams.Params,
-		AddPeers:     cfg.NeutrinoMode.AddPeers,
-		ConnectPeers: cfg.NeutrinoMode.ConnectPeers,
+		ChainParams:  *netParams.Params,
+		AddPeers:     cfg.AddPeers,
+		ConnectPeers: cfg.ConnectPeers,
 		Dialer: func(addr net.Addr) (net.Conn, error) {
-			return cfg.net.Dial(
+			return tornet.Dial(
 				addr.Network(), addr.String(),
 				cfg.ConnectionTimeout,
 			)
 		},
 		NameResolver: func(host string) ([]net.IP, error) {
-			addrs, err := cfg.net.LookupHost(host)
+			addrs, err := tornet.LookupHost(host)
 			if err != nil {
 				return nil, err
 			}

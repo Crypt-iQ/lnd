@@ -299,8 +299,9 @@ func Main(cfg *Config, lisCfg ListenerCfg, shutdownChan <-chan struct{}) error {
 	}
 	var neutrinoCS *neutrino.ChainService
 	if mainChain.Node == "neutrino" {
-		neutrinoBackend, neutrinoCleanUp, err := initNeutrinoBackend(
-			cfg, mainChain.ChainDir,
+		neutrinoBackend, neutrinoCleanUp, err := InitNeutrinoBackend(
+			cfg.NeutrinoMode, cfg.net, cfg.SyncFreelist,
+			mainChain.ChainDir, cfg.ActiveNetParams,
 		)
 		if err != nil {
 			err := fmt.Errorf("unable to initialize neutrino "+

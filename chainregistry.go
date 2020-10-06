@@ -735,7 +735,7 @@ func initNeutrinoBackend(cfg *Config, chainDir string) (*neutrino.ChainService,
 	// match the behavior of btcwallet.
 	dbPath := filepath.Join(
 		chainDir,
-		normalizeNetwork(cfg.ActiveNetParams.Name),
+		lncfg.NormalizeNetwork(cfg.ActiveNetParams.Name),
 	)
 
 	// Ensure that the neutrino db path exists.

@@ -31,6 +31,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd"
+	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/labels"
@@ -1819,7 +1820,7 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 	const (
 		defaultFeeBase       = 1000
 		defaultFeeRate       = 1
-		defaultTimeLockDelta = lnd.DefaultBitcoinTimeLockDelta
+		defaultTimeLockDelta = chainreg.DefaultBitcoinTimeLockDelta
 		defaultMinHtlc       = 1000
 	)
 	defaultMaxHtlc := calculateMaxHtlc(lnd.MaxBtcFundingAmount)
@@ -3115,7 +3116,7 @@ func testChannelUnsettledBalance(net *lntest.NetworkHarness, t *harnessTest) {
 					Dest:           carolPubKey,
 					Amt:            int64(payAmt),
 					PaymentHash:    makeFakePayHash(t),
-					FinalCltvDelta: lnd.DefaultBitcoinTimeLockDelta,
+					FinalCltvDelta: chainreg.DefaultBitcoinTimeLockDelta,
 					TimeoutSeconds: 60,
 					FeeLimitMsat:   noFeeLimitMsat,
 				})
@@ -3412,7 +3413,7 @@ func channelForceClosureTest(net *lntest.NetworkHarness, t *harnessTest,
 
 	// TODO(roasbeef): should check default value in config here
 	// instead, or make delay a param
-	defaultCLTV := uint32(lnd.DefaultBitcoinTimeLockDelta)
+	defaultCLTV := uint32(chainreg.DefaultBitcoinTimeLockDelta)
 
 	// We must let Alice have an open channel before she can send a node
 	// announcement, so we open a channel with Carol,
@@ -3470,7 +3471,7 @@ func channelForceClosureTest(net *lntest.NetworkHarness, t *harnessTest,
 				Dest:           carolPubKey,
 				Amt:            int64(paymentAmt),
 				PaymentHash:    makeFakePayHash(t),
-				FinalCltvDelta: lnd.DefaultBitcoinTimeLockDelta,
+				FinalCltvDelta: chainreg.DefaultBitcoinTimeLockDelta,
 				TimeoutSeconds: 60,
 				FeeLimitMsat:   noFeeLimitMsat,
 			},
@@ -5388,7 +5389,7 @@ func testSingleHopSendToRouteCase(net *lntest.NetworkHarness, t *harnessTest,
 	routesReq := &lnrpc.QueryRoutesRequest{
 		PubKey:         dave.PubKeyStr,
 		Amt:            paymentAmtSat,
-		FinalCltvDelta: lnd.DefaultBitcoinTimeLockDelta,
+		FinalCltvDelta: chainreg.DefaultBitcoinTimeLockDelta,
 	}
 	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
 	routes, err := carol.QueryRoutes(ctxt, routesReq)
@@ -5744,7 +5745,7 @@ func testMultiHopSendToRoute(net *lntest.NetworkHarness, t *harnessTest) {
 	routesReq := &lnrpc.QueryRoutesRequest{
 		PubKey:         carol.PubKeyStr,
 		Amt:            paymentAmt,
-		FinalCltvDelta: lnd.DefaultBitcoinTimeLockDelta,
+		FinalCltvDelta: chainreg.DefaultBitcoinTimeLockDelta,
 	}
 	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
 	routes, err := net.Alice.QueryRoutes(ctxt, routesReq)
@@ -7910,7 +7911,7 @@ func testGarbageCollectLinkNodes(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// We'll need to mine some blocks in order to mark the channel fully
 	// closed.
-	_, err = net.Miner.Node.Generate(lnd.DefaultBitcoinTimeLockDelta - defaultCSV)
+	_, err = net.Miner.Node.Generate(chainreg.DefaultBitcoinTimeLockDelta - defaultCSV)
 	if err != nil {
 		t.Fatalf("unable to generate blocks: %v", err)
 	}
@@ -12550,7 +12551,7 @@ func testRouteFeeCutoff(net *lntest.NetworkHarness, t *harnessTest) {
 	//	Alice -> Carol -> Dave
 	baseFee := int64(10000)
 	feeRate := int64(5)
-	timeLockDelta := uint32(lnd.DefaultBitcoinTimeLockDelta)
+	timeLockDelta := uint32(chainreg.DefaultBitcoinTimeLockDelta)
 	maxHtlc := calculateMaxHtlc(chanAmt)
 
 	expectedPolicy := &lnrpc.RoutingPolicy{
@@ -12813,7 +12814,7 @@ func testSendUpdateDisableChannel(net *lntest.NetworkHarness, t *harnessTest) {
 	expectedPolicy := &lnrpc.RoutingPolicy{
 		FeeBaseMsat:      int64(lnd.DefaultBitcoinBaseFeeMSat),
 		FeeRateMilliMsat: int64(lnd.DefaultBitcoinFeeRate),
-		TimeLockDelta:    lnd.DefaultBitcoinTimeLockDelta,
+		TimeLockDelta:    chainreg.DefaultBitcoinTimeLockDelta,
 		MinHtlc:          1000, // default value
 		MaxHtlcMsat:      calculateMaxHtlc(chanAmt),
 		Disabled:         true,

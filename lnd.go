@@ -299,7 +299,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, shutdownChan <-chan struct{}) error {
 	}
 	var neutrinoCS *neutrino.ChainService
 	if mainChain.Node == "neutrino" {
-		neutrinoBackend, neutrinoCleanUp, err := InitNeutrinoBackend(
+		neutrinoBackend, neutrinoCleanUp, err := chainreg.InitNeutrinoBackend(
 			cfg.NeutrinoMode, cfg.net, cfg.SyncFreelist,
 			mainChain.ChainDir, cfg.ActiveNetParams,
 		)
@@ -468,7 +468,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, shutdownChan <-chan struct{}) error {
 		ActiveNetParams:             cfg.ActiveNetParams,
 	}
 
-	activeChainControl, err := NewChainControl(chainControlCfg)
+	activeChainControl, err := chainreg.NewChainControl(chainControlCfg)
 	if err != nil {
 		err := fmt.Errorf("unable to create chain control: %v", err)
 		ltndLog.Error(err)

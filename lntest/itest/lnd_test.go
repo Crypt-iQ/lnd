@@ -32,6 +32,7 @@ import (
 	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/funding"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/labels"
 	"github.com/lightningnetwork/lnd/lncfg"
@@ -1242,7 +1243,7 @@ func basicChannelFundingTest(t *harnessTest, net *lntest.NetworkHarness,
 	alice *lntest.HarnessNode, bob *lntest.HarnessNode,
 	fundingShim *lnrpc.FundingShim) (*lnrpc.Channel, *lnrpc.Channel, func(), error) {
 
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := btcutil.Amount(100000)
 
 	// Record nodes' channel balance before testing.
@@ -1485,7 +1486,7 @@ func testUnconfirmedChannelFunding(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
 	const (
-		chanAmt = lnd.MaxBtcFundingAmount
+		chanAmt = funding.MaxBtcFundingAmount
 		pushAmt = btcutil.Amount(100000)
 	)
 
@@ -1932,7 +1933,7 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 		defaultTimeLockDelta = chainreg.DefaultBitcoinTimeLockDelta
 		defaultMinHtlc       = 1000
 	)
-	defaultMaxHtlc := calculateMaxHtlc(lnd.MaxBtcFundingAmount)
+	defaultMaxHtlc := calculateMaxHtlc(funding.MaxBtcFundingAmount)
 
 	// Launch notification clients for all nodes, such that we can
 	// get notified when they discover new channels and updates in the
@@ -1942,7 +1943,7 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 	bobSub := subscribeGraphNotifications(t, ctxb, net.Bob)
 	defer close(bobSub.quit)
 
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := chanAmt / 2
 
 	// Create a channel Alice->Bob.
@@ -2495,7 +2496,7 @@ func testOpenChannelAfterReorg(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Create a new channel that requires 1 confs before it's considered
 	// open, then broadcast the funding transaction
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := btcutil.Amount(0)
 	ctxt, _ := context.WithTimeout(ctxb, channelOpenTimeout)
 	pendingUpdate, err := net.OpenPendingChannel(ctxt, net.Alice, net.Bob,
@@ -2715,7 +2716,7 @@ func testDisconnectingTargetPeer(net *lntest.NetworkHarness, t *harnessTest) {
 		t.Fatalf("unable to send coins to alice: %v", err)
 	}
 
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := btcutil.Amount(0)
 
 	// Create a new channel that requires 1 confs before it's considered
@@ -2850,7 +2851,7 @@ func testDisconnectingTargetPeer(net *lntest.NetworkHarness, t *harnessTest) {
 func testChannelFundingPersistence(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := btcutil.Amount(0)
 
 	// As we need to create a channel that requires more than 1
@@ -3038,7 +3039,7 @@ func testChannelBalance(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Open a channel with 0.16 BTC between Alice and Bob, ensuring the
 	// channel has been opened properly.
-	amount := lnd.MaxBtcFundingAmount
+	amount := funding.MaxBtcFundingAmount
 
 	// Creates a helper closure to be used below which asserts the proper
 	// response to a channel balance RPC.
@@ -6106,7 +6107,7 @@ func testSendToRouteErrorPropagation(net *lntest.NetworkHarness, t *harnessTest)
 func testUnannouncedChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
-	amount := lnd.MaxBtcFundingAmount
+	amount := funding.MaxBtcFundingAmount
 
 	// Open a channel between Alice and Bob, ensuring the
 	// channel has been opened properly.
@@ -7345,7 +7346,7 @@ func testBasicChannelCreationAndUpdates(net *lntest.NetworkHarness, t *harnessTe
 	ctxb := context.Background()
 	const (
 		numChannels = 2
-		amount      = lnd.MaxBtcFundingAmount
+		amount      = funding.MaxBtcFundingAmount
 	)
 
 	// Subscribe Bob and Alice to channel event notifications.
@@ -7509,7 +7510,7 @@ func testMaxPendingChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
 	maxPendingChannels := lncfg.DefaultMaxPendingChannels + 1
-	amount := lnd.MaxBtcFundingAmount
+	amount := funding.MaxBtcFundingAmount
 
 	// Create a new node (Carol) with greater number of max pending
 	// channels.
@@ -8132,7 +8133,7 @@ func testRevokedCloseRetribution(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
 	const (
-		chanAmt     = lnd.MaxBtcFundingAmount
+		chanAmt     = funding.MaxBtcFundingAmount
 		paymentAmt  = 10000
 		numInvoices = 6
 	)
@@ -8401,7 +8402,7 @@ func testRevokedCloseRetributionZeroValueRemoteOutput(net *lntest.NetworkHarness
 	ctxb := context.Background()
 
 	const (
-		chanAmt     = lnd.MaxBtcFundingAmount
+		chanAmt     = funding.MaxBtcFundingAmount
 		paymentAmt  = 10000
 		numInvoices = 6
 	)
@@ -8650,7 +8651,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 	ctxb := context.Background()
 
 	const (
-		chanAmt     = lnd.MaxBtcFundingAmount
+		chanAmt     = funding.MaxBtcFundingAmount
 		pushAmt     = 200000
 		paymentAmt  = 10000
 		numInvoices = 6
@@ -8696,7 +8697,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 
 	// In order to test Dave's response to an uncooperative channel closure
 	// by Carol, we'll first open up a channel between them with a
-	// lnd.MaxBtcFundingAmount (2^24) satoshis value.
+	// funding.MaxBtcFundingAmount (2^24) satoshis value.
 	ctxt, _ = context.WithTimeout(ctxb, channelOpenTimeout)
 	chanPoint := openChannelAndAssert(
 		ctxt, t, net, dave, carol,
@@ -9073,7 +9074,7 @@ func testRevokedCloseRetributionAltruistWatchtower(net *lntest.NetworkHarness,
 
 	ctxb := context.Background()
 	const (
-		chanAmt     = lnd.MaxBtcFundingAmount
+		chanAmt     = funding.MaxBtcFundingAmount
 		paymentAmt  = 10000
 		numInvoices = 6
 		externalIP  = "1.2.3.4"
@@ -9637,7 +9638,7 @@ func assertDLPExecuted(net *lntest.NetworkHarness, t *harnessTest,
 func testDataLossProtection(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 	const (
-		chanAmt     = lnd.MaxBtcFundingAmount
+		chanAmt     = funding.MaxBtcFundingAmount
 		paymentAmt  = 10000
 		numInvoices = 6
 	)
@@ -10227,7 +10228,7 @@ func subscribeGraphNotifications(t *harnessTest, ctxb context.Context,
 func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
-	const chanAmt = lnd.MaxBtcFundingAmount
+	const chanAmt = funding.MaxBtcFundingAmount
 
 	// Let Alice subscribe to graph notifications.
 	graphSub := subscribeGraphNotifications(
@@ -10554,7 +10555,7 @@ func testNodeAnnouncement(net *lntest.NetworkHarness, t *harnessTest) {
 func testNodeSignVerify(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxb := context.Background()
 
-	chanAmt := lnd.MaxBtcFundingAmount
+	chanAmt := funding.MaxBtcFundingAmount
 	pushAmt := btcutil.Amount(100000)
 
 	// Create a channel between alice and bob.
@@ -13094,7 +13095,7 @@ func testAbandonChannel(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// First establish a channel between Alice and Bob.
 	channelParam := lntest.OpenChannelParams{
-		Amt:     lnd.MaxBtcFundingAmount,
+		Amt:     funding.MaxBtcFundingAmount,
 		PushAmt: btcutil.Amount(100000),
 	}
 
@@ -13887,7 +13888,7 @@ func testExternalFundingChanPoint(net *lntest.NetworkHarness, t *harnessTest) {
 	// flow. To start with, we'll create a pending channel with a shim for
 	// a transaction that will never be published.
 	const thawHeight uint32 = 10
-	const chanSize = lnd.MaxBtcFundingAmount
+	const chanSize = funding.MaxBtcFundingAmount
 	fundingShim1, chanPoint1, _ := deriveFundingShim(
 		net, t, carol, dave, chanSize, thawHeight, 1, false,
 	)

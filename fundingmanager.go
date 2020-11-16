@@ -20,6 +20,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/channeldb/kvdb"
 	"github.com/lightningnetwork/lnd/discovery"
+	"github.com/lightningnetwork/lnd/funding"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
@@ -3525,7 +3526,7 @@ func (f *fundingManager) saveChannelOpeningState(chanPoint *wire.OutPoint,
 		}
 
 		var outpointBytes bytes.Buffer
-		if err = writeOutpoint(&outpointBytes, chanPoint); err != nil {
+		if err = funding.WriteOutpoint(&outpointBytes, chanPoint); err != nil {
 			return err
 		}
 
@@ -3557,7 +3558,7 @@ func (f *fundingManager) getChannelOpeningState(chanPoint *wire.OutPoint) (
 		}
 
 		var outpointBytes bytes.Buffer
-		if err := writeOutpoint(&outpointBytes, chanPoint); err != nil {
+		if err := funding.WriteOutpoint(&outpointBytes, chanPoint); err != nil {
 			return err
 		}
 
@@ -3586,7 +3587,7 @@ func (f *fundingManager) deleteChannelOpeningState(chanPoint *wire.OutPoint) err
 		}
 
 		var outpointBytes bytes.Buffer
-		if err := writeOutpoint(&outpointBytes, chanPoint); err != nil {
+		if err := funding.WriteOutpoint(&outpointBytes, chanPoint); err != nil {
 			return err
 		}
 

@@ -614,21 +614,12 @@ func (m *Manager) start() error {
 
 // Stop signals all helper goroutines to execute a graceful shutdown. This
 // method will block until all goroutines have exited.
-func (m *Manager) Stop() error {
-	var err error
+func (m *Manager) Stop() {
 	m.stopped.Do(func() {
-		err = m.stop()
+		fndgLog.Info("Funding manager shutting down")
+		close(m.quit)
+		m.wg.Wait()
 	})
-	return err
-}
-
-func (m *Manager) stop() error {
-	fndgLog.Infof("Funding manager shutting down")
-
-	close(m.quit)
-	m.wg.Wait()
-
-	return nil
 }
 
 // nextPendingChanID returns the next free pending channel ID to be used to

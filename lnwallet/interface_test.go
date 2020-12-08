@@ -2869,17 +2869,6 @@ var walletTests = []walletTestCase{
 	},
 }
 
-func clearWalletStates(a, b *lnwallet.LightningWallet) error {
-	a.ResetReservations()
-	b.ResetReservations()
-
-	if err := a.Cfg.Database.Wipe(); err != nil {
-		return err
-	}
-
-	return b.Cfg.Database.Wipe()
-}
-
 func waitForMempoolTx(r *rpctest.Harness, txid *chainhash.Hash) error {
 	var found bool
 	var tx *btcutil.Tx
@@ -3089,73 +3078,34 @@ func testSingleFunderExternalFundingTx(miner *rpctest.Harness,
 func TestLightningWallet(t *testing.T) {
 	t.Parallel()
 
-	// Initialize the harness around a btcd node which will serve as our
-	// dedicated miner to generate blocks, cause re-orgs, etc. We'll set
-	// up this node with a chain length of 125, so we have plenty of BTC
-	// to play around with.
-	miningNode, err := rpctest.New(
-		netParams, nil, []string{"--txindex"}, "",
-	)
-	if err != nil {
-		t.Fatalf("unable to create mining node: %v", err)
-	}
-	defer miningNode.TearDown()
-	if err := miningNode.SetUp(true, 25); err != nil {
-		t.Fatalf("unable to set up mining node: %v", err)
-	}
-
-	// Next mine enough blocks in order for segwit and the CSV package
-	// soft-fork to activate on RegNet.
-	numBlocks := netParams.MinerConfirmationWindow * 2
-	if _, err := miningNode.Node.Generate(numBlocks); err != nil {
-		t.Fatalf("unable to generate blocks: %v", err)
-	}
-
-	rpcConfig := miningNode.RPCConfig()
-
-	tempDir, err := ioutil.TempDir("", "channeldb")
-	if err != nil {
-		t.Fatalf("unable to create temp dir: %v", err)
-	}
-	db, err := channeldb.Open(tempDir)
-	if err != nil {
-		t.Fatalf("unable to create db: %v", err)
-	}
-	testCfg := chainntnfs.CacheConfig{
-		QueryDisable: false,
-	}
-	hintCache, err := chainntnfs.NewHeightHintCache(testCfg, db)
-	if err != nil {
-		t.Fatalf("unable to create height hint cache: %v", err)
-	}
-	chainNotifier, err := btcdnotify.New(
-		&rpcConfig, netParams, hintCache, hintCache,
-	)
-	if err != nil {
-		t.Fatalf("unable to create notifier: %v", err)
-	}
-	if err := chainNotifier.Start(); err != nil {
-		t.Fatalf("unable to start notifier: %v", err)
-	}
-
 	for _, walletDriver := range lnwallet.RegisteredWallets() {
 		for _, backEnd := range walletDriver.BackEnds() {
-			if !runTests(t, walletDriver, backEnd, miningNode,
-				rpcConfig, chainNotifier) {
-				return
+			for _, walletTest := range walletTests {
+				node, rpc, notif, err := walletDependencies()
+				if err != nil {
+					t.Fatalf("unable to create deps: %v", err)
+				}
+
+				if !runTest(t, walletDriver, backEnd,
+					node, *rpc, notif, walletTest) {
+					return
+				}
+
+				if err := node.TearDown(); err != nil {
+					t.Fatalf("unable to delete node: %v", err)
+				}
 			}
 		}
 	}
 }
 
-// runTests runs all of the tests for a single interface implementation and
-// chain back-end combination. This makes it easier to use `defer` as well as
-// factoring out the test logic from the loop which cycles through the
-// interface implementations.
-func runTests(t *testing.T, walletDriver *lnwallet.WalletDriver,
+// runTest runs a single test for a single interface implementation and
+// chain back-end combination.
+func runTest(t *testing.T, walletDriver *lnwallet.WalletDriver,
 	backEnd string, miningNode *rpctest.Harness,
 	rpcConfig rpcclient.ConnConfig,
-	chainNotifier chainntnfs.ChainNotifier) bool {
+	chainNotifier chainntnfs.ChainNotifier,
+	walletTest walletTestCase) bool {
 
 	var (
 		bio lnwallet.BlockChainIO
@@ -3406,38 +3356,80 @@ func runTests(t *testing.T, walletDriver *lnwallet.WalletDriver,
 	assertProperBalance(t, alice, 1, 80)
 	assertProperBalance(t, bob, 1, 80)
 
-	// Execute every test, clearing possibly mutated
-	// wallet state after each step.
-	for _, walletTest := range walletTests {
-
-		walletTest := walletTest
-
-		testName := fmt.Sprintf("%v/%v:%v", walletType, backEnd,
-			walletTest.name)
-		success := t.Run(testName, func(t *testing.T) {
-			if backEnd == "neutrino" &&
-				strings.Contains(walletTest.name, "dual funder") {
-				t.Skip("skipping dual funder tests for neutrino")
-			}
-			if backEnd == "neutrino" &&
-				strings.Contains(walletTest.name, "spend unconfirmed") {
-				t.Skip("skipping spend unconfirmed tests for neutrino")
-			}
-
-			walletTest.test(miningNode, alice, bob, t)
-		})
-		if !success {
-			return false
+	// Execute the test.
+	testName := fmt.Sprintf("%v/%v:%v", walletType, backEnd,
+		walletTest.name)
+	return t.Run(testName, func(t *testing.T) {
+		if backEnd == "neutrino" &&
+			strings.Contains(walletTest.name, "dual funder") {
+			t.Skip("skipping dual funder tests for neutrino")
+		}
+		if backEnd == "neutrino" &&
+			strings.Contains(walletTest.name, "spend unconfirmed") {
+			t.Skip("skipping spend unconfirmed tests for neutrino")
 		}
 
-		// TODO(roasbeef): possible reset mining
-		// node's chainstate to initial level, cleanly
-		// wipe buckets
-		if err := clearWalletStates(alice, bob); err !=
-			nil && err != kvdb.ErrBucketNotFound {
-			t.Fatalf("unable to wipe wallet state: %v", err)
-		}
+		walletTest.test(miningNode, alice, bob, t)
+	})
+}
+
+func walletDependencies() (*rpctest.Harness, *rpcclient.ConnConfig,
+	chainntnfs.ChainNotifier, error) {
+
+	// Initialize the harness around a btcd node which will serve as our
+	// dedicated miner to generate blocks, cause re-orgs, etc. We'll set
+	// up this node with a chain length of 125, so we have plenty of BTC
+	// to play around with.
+	miningNode, err := rpctest.New(
+		netParams, nil, []string{"--txindex"}, "",
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := miningNode.SetUp(true, 25); err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
 	}
 
-	return true
+	// Next mine enough blocks in order for segwit and the CSV package
+	// soft-fork to activate on RegNet.
+	numBlocks := netParams.MinerConfirmationWindow * 2
+	if _, err := miningNode.Node.Generate(numBlocks); err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+
+	rpcConfig := miningNode.RPCConfig()
+
+	tempDir, err := ioutil.TempDir("", "channeldb")
+	if err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+	db, err := channeldb.Open(tempDir)
+	if err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+	testCfg := chainntnfs.CacheConfig{
+		QueryDisable: false,
+	}
+	hintCache, err := chainntnfs.NewHeightHintCache(testCfg, db)
+	if err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+	chainNotifier, err := btcdnotify.New(
+		&rpcConfig, netParams, hintCache, hintCache,
+	)
+	if err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+	if err := chainNotifier.Start(); err != nil {
+		_ = miningNode.TearDown()
+		return nil, nil, nil, err
+	}
+
+	return miningNode, &rpcConfig, chainNotifier, nil
 }

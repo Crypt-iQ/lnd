@@ -2869,17 +2869,6 @@ var walletTests = []walletTestCase{
 	},
 }
 
-func clearWalletStates(a, b *lnwallet.LightningWallet) error {
-	a.ResetReservations()
-	b.ResetReservations()
-
-	if err := a.Cfg.Database.Wipe(); err != nil {
-		return err
-	}
-
-	return b.Cfg.Database.Wipe()
-}
-
 func waitForMempoolTx(r *rpctest.Harness, txid *chainhash.Hash) error {
 	var found bool
 	var tx *btcutil.Tx
@@ -3140,22 +3129,24 @@ func TestLightningWallet(t *testing.T) {
 
 	for _, walletDriver := range lnwallet.RegisteredWallets() {
 		for _, backEnd := range walletDriver.BackEnds() {
-			if !runTests(t, walletDriver, backEnd, miningNode,
-				rpcConfig, chainNotifier) {
-				return
+			for _, walletTest := range walletTests {
+				if !runTest(t, walletDriver, backEnd,
+					miningNode, rpcConfig, chainNotifier,
+					walletTest) {
+					return
+				}
 			}
 		}
 	}
 }
 
-// runTests runs all of the tests for a single interface implementation and
-// chain back-end combination. This makes it easier to use `defer` as well as
-// factoring out the test logic from the loop which cycles through the
-// interface implementations.
-func runTests(t *testing.T, walletDriver *lnwallet.WalletDriver,
+// runTest runs all of the tests for a single interface implementation and
+// chain back-end combination.
+func runTest(t *testing.T, walletDriver *lnwallet.WalletDriver,
 	backEnd string, miningNode *rpctest.Harness,
 	rpcConfig rpcclient.ConnConfig,
-	chainNotifier chainntnfs.ChainNotifier) bool {
+	chainNotifier chainntnfs.ChainNotifier,
+	walletTest walletTestCase) bool {
 
 	var (
 		bio lnwallet.BlockChainIO
@@ -3406,38 +3397,18 @@ func runTests(t *testing.T, walletDriver *lnwallet.WalletDriver,
 	assertProperBalance(t, alice, 1, 80)
 	assertProperBalance(t, bob, 1, 80)
 
-	// Execute every test, clearing possibly mutated
-	// wallet state after each step.
-	for _, walletTest := range walletTests {
-
-		walletTest := walletTest
-
-		testName := fmt.Sprintf("%v/%v:%v", walletType, backEnd,
-			walletTest.name)
-		success := t.Run(testName, func(t *testing.T) {
-			if backEnd == "neutrino" &&
-				strings.Contains(walletTest.name, "dual funder") {
-				t.Skip("skipping dual funder tests for neutrino")
-			}
-			if backEnd == "neutrino" &&
-				strings.Contains(walletTest.name, "spend unconfirmed") {
-				t.Skip("skipping spend unconfirmed tests for neutrino")
-			}
-
-			walletTest.test(miningNode, alice, bob, t)
-		})
-		if !success {
-			return false
+	testName := fmt.Sprintf("%v/%v:%v", walletType, backEnd,
+		walletTest.name)
+	return t.Run(testName, func(t *testing.T) {
+		if backEnd == "neutrino" &&
+			strings.Contains(walletTest.name, "dual funder") {
+			t.Skip("skipping dual funder tests for neutrino")
+		}
+		if backEnd == "neutrino" &&
+			strings.Contains(walletTest.name, "spend unconfirmed") {
+			t.Skip("skipping spend unconfirmed tests for neutrino")
 		}
 
-		// TODO(roasbeef): possible reset mining
-		// node's chainstate to initial level, cleanly
-		// wipe buckets
-		if err := clearWalletStates(alice, bob); err !=
-			nil && err != kvdb.ErrBucketNotFound {
-			t.Fatalf("unable to wipe wallet state: %v", err)
-		}
-	}
-
-	return true
+		walletTest.test(miningNode, alice, bob, t)
+	})
 }

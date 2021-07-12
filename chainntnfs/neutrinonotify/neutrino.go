@@ -859,6 +859,8 @@ func (n *NeutrinoNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
 		return nil, err
 	}
 
+	<-time.After(time.Second * 5)
+
 	// To determine whether this transaction has confirmed on-chain, we'll
 	// update our filter to watch for the transaction at tip and we'll also
 	// dispatch a historical rescan to determine if it has confirmed in the

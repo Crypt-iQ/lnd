@@ -27,6 +27,48 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 )
 
+func testSingleConfFlake(miner *rpctest.Harness,
+	notifier chainntnfs.TestChainNotifier, scriptDispatch bool, t *testing.T) {
+
+	txid, pkScript, err := chainntnfs.GetTestTxidAndScript(miner)
+	if err != nil {
+		t.Fatalf("unable to create test tx: %v", err)
+	}
+	if err := chainntnfs.WaitForMempoolTx(miner, txid); err != nil {
+		t.Fatalf("tx not relayed to miner: %v", err)
+	}
+
+	_, currentHeight, err := miner.Client.GetBestBlock()
+	if err != nil {
+		t.Fatalf("unable to get current height: %v", err)
+	}
+
+	numConfs := uint32(1)
+
+	// Mine the block in a goroutine. This way the
+	// HistoricalDispatch may go from height -> height+1
+	// else if it goes to height->height, it could succeed
+	// or it can be missed.
+	go func() {
+		_, _ = miner.Client.Generate(1)
+	}()
+
+	confIntent, err := notifier.RegisterConfirmationsNtfn(
+		nil, pkScript, numConfs, uint32(currentHeight),
+	)
+	if err != nil {
+		t.Fatalf("unable to register ntfn: %v", err)
+	}
+
+	select {
+	case _ = <-confIntent.Confirmed:
+		// successful
+
+	case <-time.After(20 * time.Second):
+		t.Fatalf("confirmation ntfn never received")
+	}
+}
+
 func testSingleConfirmationNotification(miner *rpctest.Harness,
 	notifier chainntnfs.TestChainNotifier, scriptDispatch bool, t *testing.T) {
 
@@ -1812,49 +1854,54 @@ type blockCatchupTestCase struct {
 
 var txNtfnTests = []txNtfnTestCase{
 	{
-		name: "single conf ntfn",
-		test: testSingleConfirmationNotification,
+		name: "single conf ntfn flake",
+		test: testSingleConfFlake,
 	},
-	{
-		name: "multi conf ntfn",
-		test: testMultiConfirmationNotification,
-	},
-	{
-		name: "batch conf ntfn",
-		test: testBatchConfirmationNotification,
-	},
-	{
-		name: "multi client conf",
-		test: testMultiClientConfirmationNotification,
-	},
-	{
-		name: "lazy ntfn consumer",
-		test: testLazyNtfnConsumer,
-	},
-	{
-		name: "historical conf dispatch",
-		test: testTxConfirmedBeforeNtfnRegistration,
-	},
-	{
-		name: "reorg conf",
-		test: testReorgConf,
-	},
-	{
-		name: "spend ntfn",
-		test: testSpendNotification,
-	},
-	{
-		name: "historical spend dispatch",
-		test: testSpendBeforeNtfnRegistration,
-	},
-	{
-		name: "reorg spend",
-		test: testReorgSpend,
-	},
-	{
-		name: "cancel spend ntfn",
-		test: testCancelSpendNtfn,
-	},
+	/*
+		{
+			name: "single conf ntfn",
+			test: testSingleConfirmationNotification,
+		},
+		{
+			name: "multi conf ntfn",
+			test: testMultiConfirmationNotification,
+		},
+		{
+			name: "batch conf ntfn",
+			test: testBatchConfirmationNotification,
+		},
+		{
+			name: "multi client conf",
+			test: testMultiClientConfirmationNotification,
+		},
+		{
+			name: "lazy ntfn consumer",
+			test: testLazyNtfnConsumer,
+		},
+		{
+			name: "historical conf dispatch",
+			test: testTxConfirmedBeforeNtfnRegistration,
+		},
+		{
+			name: "reorg conf",
+			test: testReorgConf,
+		},
+		{
+			name: "spend ntfn",
+			test: testSpendNotification,
+		},
+		{
+			name: "historical spend dispatch",
+			test: testSpendBeforeNtfnRegistration,
+		},
+		{
+			name: "reorg spend",
+			test: testReorgSpend,
+		},
+		{
+			name: "cancel spend ntfn",
+			test: testCancelSpendNtfn,
+		},*/
 }
 
 var blockNtfnTests = []blockNtfnTestCase{

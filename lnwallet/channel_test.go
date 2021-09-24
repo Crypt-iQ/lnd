@@ -9834,10 +9834,8 @@ func TestChannelGetDustSum(t *testing.T) {
 func testGetDustSum(t *testing.T, chantype channeldb.ChannelType) {
 	t.Parallel()
 
-	// GetDustSum does not take into account the trimmed-to-dust mechanism so
-	// it shouldn't matter what type of channel we create. This makes a
-	// channel with Alice's dust limit set to 200sats and Bob's dust limit
-	// set to 1300sats.
+	// This makes a channel with Alice's dust limit set to 200sats and Bob's
+	// dust limit set to 1300sats.
 	aliceChannel, bobChannel, cleanUp, err := CreateTestChannels(chantype)
 	require.NoError(t, err)
 	defer cleanUp()
@@ -9853,8 +9851,18 @@ func testGetDustSum(t *testing.T, chantype channeldb.ChannelType) {
 		require.Equal(t, expRemote, remoteDustSum)
 	}
 
+	// We'll lower the fee from 6000sats/kWU to 253sats/kWU for our test.
+	fee := chainfee.SatPerKWeight(253)
+	err = aliceChannel.UpdateFee(fee)
+	require.NoError(t, err)
+	err = bobChannel.ReceiveUpdateFee(fee)
+	require.NoError(t, err)
+	err = ForceStateTransition(aliceChannel, bobChannel)
+	require.NoError(t, err)
+
 	// Create an HTLC that Bob will send to Alice which is above Alice's dust
-	// limit and below Bob's dust limit.
+	// limit and below Bob's dust limit. This takes into account dust trimming
+	// for non-zero-fee channels.
 	htlc1Amt := lnwire.MilliSatoshi(700_000)
 	htlc1, preimage1 := createHTLC(0, htlc1Amt)
 
@@ -9946,9 +9954,9 @@ func testGetDustSum(t *testing.T, chantype channeldb.ChannelType) {
 
 	// We'll now assert that if Alice sends an HTLC above her dust limit
 	// and then updates the fee of the channel to trigger the trimmed to
-	// dust mechanism, Alice won't count this HTLC in the dust sum for her
-	// commitment.
-	htlc3Amt := lnwire.MilliSatoshi(350_000)
+	// dust mechanism, Alice will count this HTLC in the dust sum for her
+	// commitment in the non-zero-fee case.
+	htlc3Amt := lnwire.MilliSatoshi(400_000)
 	htlc3, _ := createHTLC(1, htlc3Amt)
 
 	_, err = aliceChannel.AddHTLC(htlc3, nil)
@@ -9963,7 +9971,7 @@ func testGetDustSum(t *testing.T, chantype channeldb.ChannelType) {
 
 	// Alice will now send UpdateFee with a large feerate and neither
 	// perspective should change.
-	fee := chainfee.SatPerKWeight(50_000)
+	fee = chainfee.SatPerKWeight(50_000)
 	err = aliceChannel.UpdateFee(fee)
 	require.NoError(t, err)
 	err = bobChannel.ReceiveUpdateFee(fee)
@@ -9971,9 +9979,14 @@ func testGetDustSum(t *testing.T, chantype channeldb.ChannelType) {
 	checkDust(aliceChannel, htlc2Amt, htlc2Amt+htlc3Amt)
 	checkDust(bobChannel, htlc2Amt+htlc3Amt, htlc2Amt)
 
-	// Forcing a state transition should not change anything either.
+	// Forcing a state transition should change in the non-zero-fee case.
 	err = ForceStateTransition(aliceChannel, bobChannel)
 	require.NoError(t, err)
-	checkDust(aliceChannel, htlc2Amt, htlc2Amt+htlc3Amt)
-	checkDust(bobChannel, htlc2Amt+htlc3Amt, htlc2Amt)
+	if chantype.ZeroHtlcTxFee() {
+		checkDust(aliceChannel, htlc2Amt, htlc2Amt+htlc3Amt)
+		checkDust(bobChannel, htlc2Amt+htlc3Amt, htlc2Amt)
+	} else {
+		checkDust(aliceChannel, htlc2Amt+htlc3Amt, htlc2Amt+htlc3Amt)
+		checkDust(bobChannel, htlc2Amt+htlc3Amt, htlc2Amt+htlc3Amt)
+	}
 }

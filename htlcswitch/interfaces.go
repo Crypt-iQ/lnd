@@ -7,6 +7,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/record"
 )
@@ -64,8 +65,12 @@ type dustHandler interface {
 	// commitment.
 	getDustSum(remote bool) lnwire.MilliSatoshi
 
-	// getDustLimits returns the underlying channel's dust limits.
-	getDustLimits() (lnwire.MilliSatoshi, lnwire.MilliSatoshi)
+	// getFeeRate returns the current channel feerate.
+	getFeeRate() chainfee.SatPerKWeight
+
+	// getDustClosure returns a closure that can evaluate whether a passed
+	// HTLC is dust.
+	getDustClosure() dustClosure
 }
 
 // ChannelUpdateHandler is an interface that provides methods that allow

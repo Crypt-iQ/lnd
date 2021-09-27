@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/clock"
+	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
@@ -66,12 +67,15 @@ type MailBox interface {
 	// Reset the packet head to point at the first element in the list.
 	ResetPackets() error
 
-	// SetDustLimits sets the local and remote dust limits so that
-	// DustPackets can be called.
-	SetDustLimits(local, remote lnwire.MilliSatoshi)
+	// SetDustClosure takes in a closure that is used to evaluate whether
+	// mailbox HTLC's are dust.
+	SetDustClosure(isDust dustClosure)
+
+	// SetFeeRate sets the feerate to be used when evaluating dust.
+	SetFeeRate(feerate chainfee.SatPerKWeight)
 
 	// DustPackets returns the dust sum for Adds in the mailbox for the
-	// local and remote dust limits.
+	// local and remote commitments.
 	DustPackets() (lnwire.MilliSatoshi, lnwire.MilliSatoshi)
 
 	// Start starts the mailbox and any goroutines it needs to operate
@@ -140,14 +144,14 @@ type memoryMailBox struct {
 	pktShutdown  chan struct{}
 	quit         chan struct{}
 
-	// These are set when the link attaches the mailbox.
-	localDustLimit  lnwire.MilliSatoshi
-	remoteDustLimit lnwire.MilliSatoshi
+	// feeRate is set when the link receives or sends out fee updates. It is
+	// refreshed when AttachMailBox is called in case a fee update did not get
+	// committed.
+	feeRate chainfee.SatPerKWeight
 
-	// These counters keep track of the mailbox dust sum, using the dust
-	// limits above.
-	localDustSum  lnwire.MilliSatoshi
-	remoteDustSum lnwire.MilliSatoshi
+	// isDust is set when AttachMailBox is called and serves to evaluate the
+	// outstanding dust in the memoryMailBox given the current set feeRate.
+	isDust dustClosure
 }
 
 // newMemoryMailBox creates a new instance of the memoryMailBox.
@@ -290,10 +294,6 @@ func (m *memoryMailBox) AckPacket(inKey CircuitKey) bool {
 
 		m.addPkts.Remove(entry)
 		delete(m.addIndex, inKey)
-
-		// Attempt to decrement the dust sums.
-		removedEntry := entry.Value.(*pktWithExpiry)
-		m.decrementDustSums(removedEntry.pkt.amount)
 
 		return true
 	}
@@ -618,9 +618,6 @@ func (m *memoryMailBox) AddPacket(pkt *htlcPacket) error {
 			m.addHead = entry
 		}
 
-		// Attempt to increment the dust sums.
-		m.incrementDustSums(pkt.amount)
-
 	default:
 		m.pktCond.L.Unlock()
 		return fmt.Errorf("unknown htlc type: %T", htlc)
@@ -634,47 +631,21 @@ func (m *memoryMailBox) AddPacket(pkt *htlcPacket) error {
 	return nil
 }
 
-// incrementDustSums takes an amount and increments the dust sum variables if
-// the amount is below the associated dust limit. This function should be
-// called with the pktCond's underlying lock held.
-func (m *memoryMailBox) incrementDustSums(amt lnwire.MilliSatoshi) {
-	if amt >= m.localDustLimit && amt >= m.remoteDustLimit {
-		return
-	}
-
-	if amt < m.localDustLimit {
-		m.localDustSum += amt
-	}
-
-	if amt < m.remoteDustLimit {
-		m.remoteDustSum += amt
-	}
-}
-
-// decrementDustSums takes an amount and decrements the dust sum variables if
-// the amount is below the associated dust limit. This function should be
-// called with the pktCond's underlying lock held.
-func (m *memoryMailBox) decrementDustSums(amt lnwire.MilliSatoshi) {
-	if amt >= m.localDustLimit && amt >= m.remoteDustLimit {
-		return
-	}
-
-	if amt < m.localDustLimit {
-		m.localDustSum -= amt
-	}
-
-	if amt < m.remoteDustLimit {
-		m.remoteDustSum -= amt
-	}
-}
-
-// SetDustLimits sets the local and remote dust limit member variables.
-func (m *memoryMailBox) SetDustLimits(local, remote lnwire.MilliSatoshi) {
+// SetFeeRate sets the memoryMailBox's feerate for use in DustPackets.
+func (m *memoryMailBox) SetFeeRate(feeRate chainfee.SatPerKWeight) {
 	m.pktCond.L.Lock()
 	defer m.pktCond.L.Unlock()
 
-	m.localDustLimit = local
-	m.remoteDustLimit = remote
+	m.feeRate = feeRate
+}
+
+// SetDustClosure sets the memoryMailBox's dustClosure for use in DustPackets.
+func (m *memoryMailBox) SetDustClosure(isDust dustClosure) {
+
+	m.pktCond.L.Lock()
+	defer m.pktCond.L.Unlock()
+
+	m.isDust = isDust
 }
 
 // DustPackets returns the dust sum for add packets in the mailbox. The first
@@ -687,7 +658,29 @@ func (m *memoryMailBox) DustPackets() (lnwire.MilliSatoshi,
 	m.pktCond.L.Lock()
 	defer m.pktCond.L.Unlock()
 
-	return m.localDustSum, m.remoteDustSum
+	var (
+		localDustSum lnwire.MilliSatoshi
+		remoteDustSum lnwire.MilliSatoshi
+	)
+
+	// Run through the map of HTLC's and determine the dust sum with calls to
+	// the memoryMailBox's isDust closure. Note that all mailbox packets are
+	// outgoing so the second argument to isDust will be false.
+	for _, e := range m.addIndex {
+		addPkt := e.Value.(*pktWithExpiry).pkt
+
+		// Evaluate whether this HTLC is dust on the local commitment.
+		if m.isDust(m.feeRate, false, true, addPkt.amount.ToSatoshis()) {
+			localDustSum += addPkt.amount
+		}
+
+		// Evaluate whether this HTLC is dust on the remote commitment.
+		if m.isDust(m.feeRate, false, false, addPkt.amount.ToSatoshis()) {
+			remoteDustSum += addPkt.amount
+		}
+	}
+
+	return localDustSum, remoteDustSum
 }
 
 // FailAdd fails an UpdateAddHTLC that exists within the mailbox, removing it

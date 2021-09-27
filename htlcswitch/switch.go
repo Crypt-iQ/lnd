@@ -2361,22 +2361,22 @@ func (s *Switch) BestHeight() uint32 {
 
 // evaluateDustThreshold takes in a ChannelLink, HTLC amount, and a boolean to
 // determine whether the default dust threshold has been exceeded. This
-// heuristic is only used for HTLC's that are below either side's dust limits.
-// The sum of the commitment's dust with the mailbox's dust with the amount is
-// checked against the default threshold. If incoming is true, then the amount
-// is not included in the sum as it was already included in the commitment's
-// dust. A boolean is returned telling the caller whether the HTLC should be
-// failed back.
+// heuristic takes into account the trimmed-to-dust mechanism. The sum of the
+// commitment's dust with the mailbox's dust with the amount is checked against
+// the default threshold. If incoming is true, then the amount is not included
+// in the sum as it was already included in the commitment's dust. A boolean is
+// returned telling the caller whether the HTLC should be failed back.
 func (s *Switch) evaluateDustThreshold(link ChannelLink,
 	amount lnwire.MilliSatoshi, incoming bool) bool {
 
-	// Retrieve the link's local and remote dust limits.
-	localLimit, remoteLimit := link.getDustLimits()
+	// Retrieve the link's current commitment feerate and dustClosure.
+	feeRate := link.getFeeRate()
+	isDust := link.getDustClosure()
 
-	// Now check whether this HTLC amount is dust on either side's
-	// commitment transaction.
-	isLocalDust := amount < localLimit
-	isRemoteDust := amount < remoteLimit
+	// Evaluate if the HTLC is dust on either sides' commitment.
+	isLocalDust := isDust(feeRate, incoming, true, amount.ToSatoshis())
+	isRemoteDust := isDust(feeRate, incoming, false, amount.ToSatoshis())
+
 	if isLocalDust || isRemoteDust {
 		// Fetch the dust sums currently in the mailbox for this link.
 		cid := link.ChanID()

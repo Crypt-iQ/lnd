@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/clock"
+	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/stretchr/testify/require"
 )
@@ -538,8 +541,21 @@ func TestMailBoxDuplicateAddPacket(t *testing.T) {
 }
 
 // TestMailBoxDustHandling tests that DustPackets returns the expected values
-// after calling SetDustLimits for the local and remote dust sum.
+// for the local and remote dust sum after calling SetFeeRate and
+// SetDustClosure.
 func TestMailBoxDustHandling(t *testing.T) {
+	t.Run("tweakless mailbox dust", func(t *testing.T) {
+		testMailBoxDust(t, channeldb.SingleFunderTweaklessBit)
+	})
+	t.Run("zero htlc fee anchors mailbox dust", func(t *testing.T) {
+		testMailBoxDust(t, channeldb.SingleFunderTweaklessBit|
+			channeldb.AnchorOutputsBit|
+			channeldb.ZeroHtlcTxFeeBit,
+		)
+	})
+}
+
+func testMailBoxDust(t *testing.T, chantype channeldb.ChannelType) {
 	t.Parallel()
 
 	ctx := newMailboxContext(t, time.Now(), testExpiry)
@@ -548,17 +564,26 @@ func TestMailBoxDustHandling(t *testing.T) {
 	_, _, aliceID, bobID := genIDs()
 
 	// It should not be the case that the MailBox has packets before the
-	// dust limits are set. This is because the mailbox is always created
-	// *with* its associated link and attached via AttachMailbox, where the
-	// dust limits will be set. Even though the lifetime is longer than the
-	// link, the setting will persist across multiple link-creations.
-	localDustLimit := lnwire.MilliSatoshi(400_000)
-	remoteDustLimit := lnwire.MilliSatoshi(500_000)
-	ctx.mailbox.SetDustLimits(localDustLimit, remoteDustLimit)
+	// feeRate or dustClosure is set. This is because the mailbox is always
+	// created *with* its associated link and attached via AttachMailbox, where
+	// these parameters will be set. Even though the lifetime is longer than
+	// the link, the setting will persist across multiple link creations.
+	ctx.mailbox.SetFeeRate(chainfee.SatPerKWeight(253))
+
+	localDustLimit := btcutil.Amount(400)
+	remoteDustLimit := btcutil.Amount(500)
+	isDust := dustHelper(chantype, localDustLimit, remoteDustLimit)
+	ctx.mailbox.SetDustClosure(isDust)
 
 	// The first packet will be dust according to the remote dust limit,
-	// but not the local.
-	firstAmt := lnwire.MilliSatoshi(450_000)
+	// but not the local. We set a different amount if this is a zero fee htlc
+	// channel type.
+	firstAmt := lnwire.MilliSatoshi(600_000)
+
+	if chantype.ZeroHtlcTxFee() {
+		firstAmt = lnwire.MilliSatoshi(450_000)
+	}
+
 	firstPkt := &htlcPacket{
 		outgoingChanID: aliceID,
 		outgoingHTLCID: 0,

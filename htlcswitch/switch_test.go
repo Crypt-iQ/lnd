@@ -3357,8 +3357,6 @@ func TestSwitchDustForwarding(t *testing.T) {
 	// Alice will send 357 HTLC's of 700sats. Bob will also send 357 HTLC's
 	// of 700sats. If either side attempts to send a dust HTLC, it will
 	// fail so amounts below 800sats will breach the dust threshold.
-	// Non-dust amounts are fine to send since neither side is at the max
-	// htlc in flight limit.
 	aliceCount := 357
 	bobCount := 357
 	amt := lnwire.NewMSatFromSatoshis(700)
@@ -3561,58 +3559,123 @@ func TestSwitchDustForwarding(t *testing.T) {
 		aliceMultihopHtlc,
 	)
 	require.ErrorIs(t, err, errDustThresholdExceeded)
+}
 
-	// Carol's mailboxes internal routines should not be touching the dust
-	// sums, so we just set them here without a lock.
-	carolMailbox := n.carolChannelLink.mailBox.(*memoryMailBox)
-	carolMailbox.localDustSum = lnwire.MilliSatoshi(499_500_000)
+// TestSwitchMailboxDust tests that the switch takes into account the mailbox
+// dust when evaluating the dust threshold. The mockChannelLink does not have
+// channel state, so this only tests the switch-mailbox interaction.
+func TestSwitchMailboxDust(t *testing.T) {
+	t.Parallel()
 
-	// Carol sending a dust payment to Bob greater than 500sats should
-	// fail.
-	carolAmt, carolTimelock, carolHops = generateHops(
-		amt, testStartingHeight, n.secondBobChannelLink,
+	alicePeer, err := newMockServer(
+		t, "alice", testStartingHeight, nil, testDefaultDelta,
 	)
-
-	carolBlob, err = generateRoute(carolHops...)
 	require.NoError(t, err)
 
-	carolPreimage2 := lntypes.Preimage{0, 0, 7}
-	carolHash2 := carolPreimage2.Hash()
-	carolHtlc2 := &lnwire.UpdateAddHTLC{
-		PaymentHash: carolHash2,
-		Amount:      carolAmt,
-		Expiry:      carolTimelock,
-		OnionBlob:   carolBlob,
+	bobPeer, err := newMockServer(
+		t, "bob", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	carolPeer, err := newMockServer(
+		t, "carol", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	s, err := initSwitchWithDB(testStartingHeight, nil)
+	require.NoError(t, err)
+	err = s.Start()
+	require.NoError(t, err)
+	defer s.Stop()
+
+	chanID1, chanID2, aliceChanID, bobChanID := genIDs()
+
+	chanID3, carolChanID := genID()
+
+	aliceLink := newMockChannelLink(s, chanID1, aliceChanID, alicePeer, true)
+	err = s.AddLink(aliceLink)
+	require.NoError(t, err)
+
+	bobLink := newMockChannelLink(s, chanID2, bobChanID, bobPeer, true)
+	err = s.AddLink(bobLink)
+	require.NoError(t, err)
+
+	carolLink := newMockChannelLink(s, chanID3, carolChanID, carolPeer, true)
+	err = s.AddLink(carolLink)
+	require.NoError(t, err)
+
+	// mockChannelLink sets the local and remote dust limits of the mailbox to
+	// 400 satoshis and the feerate to 0. We'll fill the mailbox up with dust
+	// packets and assert that calls to SendHTLC will fail.
+	preimage, err := genPreimage()
+	require.NoError(t, err)
+	rhash := sha256.Sum256(preimage[:])
+	amt := lnwire.NewMSatFromSatoshis(350)
+	addMsg := &lnwire.UpdateAddHTLC{
+		PaymentHash: rhash,
+		Amount: amt,
+		ChanID: chanID1,
 	}
 
-	err = n.carolServer.htlcSwitch.SendHTLC(
-		n.carolChannelLink.ShortChanID(), uint64(carolAttemptID),
-		carolHtlc2,
-	)
+	// Initialize the carolHTLCID.
+	var carolHTLCID uint64
+
+	// It will take aliceCount HTLC's of 350sats to fill up Alice's mailbox to
+	// the point where another would put Alice over the dust threshold.
+	aliceCount := 1428
+
+	aliceMailbox := s.mailOrchestrator.GetOrCreateMailBox(chanID1, aliceChanID)
+
+	for i := 0; i < aliceCount; i++ {
+		alicePkt := &htlcPacket{
+			incomingChanID: carolChanID,
+			incomingHTLCID: carolHTLCID,
+			outgoingChanID: aliceChanID,
+			obfuscator: NewMockObfuscator(),
+			incomingAmount: amt,
+			amount: amt,
+			htlc: addMsg,
+		}
+
+		err = aliceMailbox.AddPacket(alicePkt)
+		require.NoError(t, err)
+
+		carolHTLCID++
+	}
+
+	// Sending one more HTLC to Alice should result in the dust threshold being
+	// breached.
+	err = s.SendHTLC(aliceChanID, 0, addMsg)
 	require.ErrorIs(t, err, errDustThresholdExceeded)
-	carolAttemptID++
 
-	// Sending a dust payment to Bob of 500sats should succeed.
-	smallAmt := lnwire.MilliSatoshi(500_000)
-	carolAmt, carolTimelock, carolHops = generateHops(
-		smallAmt, testStartingHeight, n.secondBobChannelLink,
-	)
-
-	carolBlob, err = generateRoute(carolHops...)
-	require.NoError(t, err)
-
-	carolPreimage3 := lntypes.Preimage{0, 0, 8}
-	carolHash3 := carolPreimage3.Hash()
-	carolHtlc3 := &lnwire.UpdateAddHTLC{
-		PaymentHash: carolHash3,
-		Amount:      carolAmt,
-		Expiry:      carolTimelock,
-		OnionBlob:   carolBlob,
+	// We'll now call ForwardPackets from Bob to ensure that the mailbox sum is
+	// also accounted for in the forwarding case.
+	packet := &htlcPacket{
+		incomingChanID: bobChanID,
+		incomingHTLCID: 0,
+		outgoingChanID: aliceChanID,
+		obfuscator: NewMockObfuscator(),
+		incomingAmount: amt,
+		amount: amt,
+		htlc: &lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
+			Amount: amt,
+			ChanID: chanID1,
+		},
 	}
 
-	err = n.carolServer.htlcSwitch.SendHTLC(
-		n.carolChannelLink.ShortChanID(), uint64(carolAttemptID),
-		carolHtlc3,
-	)
+	err = s.ForwardPackets(nil, packet)
 	require.NoError(t, err)
+
+	// Bob should receive a failure from the switch.
+	select {
+	case p := <-bobLink.packets:
+		require.NotEmpty(t, p.linkFailure)
+		assertFailureCode(
+			t, p.linkFailure, lnwire.CodeTemporaryChannelFailure,
+		)
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("no timely reply from switch")
+	}
 }

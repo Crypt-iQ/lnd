@@ -153,6 +153,10 @@ type InitFundingReserveMsg struct {
 	// used.
 	ChanFunder chanfunding.Assembler
 
+	// ZeroConf is a boolean that is true if a zero-conf channel was
+	// explicitly negotiated.
+	ZeroConf bool
+
 	// err is a channel in which all errors will be sent across. Will be
 	// nil if this initial set is successful.
 	//
@@ -848,7 +852,7 @@ func (l *LightningWallet) handleFundingReserveRequest(req *InitFundingReserveMsg
 		capacity, localFundingAmt, req.CommitFeePerKw, l, id,
 		req.PushMSat, l.Cfg.NetParams.GenesisHash, req.Flags,
 		req.CommitType, req.ChanFunder, req.PendingChanID,
-		thawHeight,
+		thawHeight, req.ZeroConf,
 	)
 	if err != nil {
 		fundingIntent.Cancel()

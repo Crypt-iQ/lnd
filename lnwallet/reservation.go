@@ -212,7 +212,8 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 	id uint64, pushMSat lnwire.MilliSatoshi, chainHash *chainhash.Hash,
 	flags lnwire.FundingFlag, commitType CommitmentType,
 	fundingAssembler chanfunding.Assembler,
-	pendingChanID [32]byte, thawHeight uint32) (*ChannelReservation, error) {
+	pendingChanID [32]byte, thawHeight uint32, zeroConf bool) (
+	*ChannelReservation, error) {
 
 	var (
 		ourBalance   lnwire.MilliSatoshi
@@ -375,6 +376,11 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 		chanType |= channeldb.FrozenBit
 	}
 
+	// If the zeroConf bool is set, add the ZeroConfBit.
+	if zeroConf {
+		chanType |= channeldb.ZeroConfBit
+	}
+
 	return &ChannelReservation{
 		ourContribution: &ChannelContribution{
 			FundingAmount: ourBalance.ToSatoshis(),
@@ -412,6 +418,24 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 		wallet:        wallet,
 		chanFunder:    fundingAssembler,
 	}, nil
+}
+
+// SetAliasScid sets the alias ShortChannelID for an option_scid_alias channel.
+// For a zero-conf channel, this will be the partialState.ShortChannelID and
+// will be partialState.OtherChannelID otherwise.
+func (r *ChannelReservation) SetAliasScid(scid lnwire.ShortChannelID) {
+	r.Lock()
+	defer r.Unlock()
+
+	if r.partialState.ChanType.IsZeroConf() {
+		// Set the ShortChannelID since this is a zero-conf channel.
+		r.partialState.ShortChannelID = scid
+		return
+	}
+
+	// Else, this is a regular-conf option_scid_alias channel. We'll set
+	// the OtherShortChannelID.
+	r.partialState.OtherShortChannelID = scid
 }
 
 // SetNumConfsRequired sets the number of confirmations that are required for

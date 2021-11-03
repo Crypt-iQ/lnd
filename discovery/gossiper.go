@@ -277,6 +277,10 @@ type Config struct {
 	// how often we should allow a new update for a specific channel and
 	// direction.
 	ChannelUpdateInterval time.Duration
+
+	// IsAlias returns true if a given ShortChannelID is an alias for
+	// option_scid_alias channels.
+	IsAlias func(scid lnwire.ShortChannelID) bool
 }
 
 // cachedNetworkMsg is a wrapper around a network message that can be used with
@@ -2147,6 +2151,24 @@ func (d *AuthenticatedGossiper) handleChanAnnouncement(nMsg *networkMsg,
 		return nil, false
 	}
 
+	// If this is a remote ChannelAnnouncement with an alias SCID, we'll
+	// reject the announcement. Since the router accepts alias SCIDs,
+	// not erroring out would be a DoS vector.
+	if nMsg.isRemote && d.cfg.IsAlias(ann.ShortChannelID) {
+		err := fmt.Errorf("ignoring remote alias channel=%v",
+			ann.ShortChannelID)
+		log.Errorf(err.Error())
+
+		key := newRejectCacheKey(
+			ann.ShortChannelID.ToUint64(),
+			sourceToPub(nMsg.source),
+		)
+		_, _ = d.recentRejects.Put(key, &cachedReject{})
+
+		nMsg.err <- err
+		return nil, false
+	}
+
 	// If the advertised inclusionary block is beyond our knowledge of the
 	// chain tip, then we'll ignore it for now.
 	d.Lock()
@@ -2618,8 +2640,13 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// is an update to a channel that is not (yet) supposed to be announced
 	// to the greater network. However, our channel counter party will need
 	// to be given the update, so we'll try sending the update directly to
-	// the remote peer.
-	if !nMsg.isRemote && chanInfo.AuthProof == nil {
+	// the remote peer. We don't send this for alias SCIDs since those
+	// should not be sent to the counter-party. The fundingmanager will
+	// handle sending an appropriate ChannelUpdate to the counter-party in
+	// that case.
+	if !nMsg.isRemote && chanInfo.AuthProof == nil &&
+		!d.cfg.IsAlias(upd.ShortChannelID) {
+
 		// Get our peer's public key.
 		remotePubKey := remotePubFromChanInfo(
 			chanInfo, upd.ChannelFlags,

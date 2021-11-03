@@ -734,6 +734,11 @@ func createTestCtx(startHeight uint32) (*testCtx, func(), error) {
 	}
 
 	broadcastedMessage := make(chan msgWithSenders, 10)
+
+	isAlias := func(lnwire.ShortChannelID) bool {
+		return false
+	}
+
 	gossiper := New(Config{
 		Notifier: notifier,
 		Broadcast: func(senders map[route.Vertex]struct{},
@@ -778,6 +783,7 @@ func createTestCtx(startHeight uint32) (*testCtx, func(), error) {
 		MinimumBatchSize:      10,
 		MaxChannelUpdateBurst: DefaultMaxChannelUpdateBurst,
 		ChannelUpdateInterval: DefaultChannelUpdateInterval,
+		IsAlias:               isAlias,
 	}, selfKeyDesc)
 
 	if err := gossiper.Start(); err != nil {
@@ -1455,6 +1461,11 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 	// NotifyWhenOffline methods. This should trigger a new attempt to send
 	// the message to the peer.
 	ctx.gossiper.Stop()
+
+	isAlias := func(lnwire.ShortChannelID) bool {
+		return false
+	}
+
 	gossiper := New(Config{
 		Notifier:             ctx.gossiper.cfg.Notifier,
 		Broadcast:            ctx.gossiper.cfg.Broadcast,
@@ -1473,6 +1484,7 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 		NumActiveSyncers:     3,
 		MinimumBatchSize:     10,
 		SubBatchDelay:        time.Second * 5,
+		IsAlias:              isAlias,
 	}, &keychain.KeyDescriptor{
 		PubKey:     ctx.gossiper.selfKey,
 		KeyLocator: ctx.gossiper.selfKeyLoc,

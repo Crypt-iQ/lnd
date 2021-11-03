@@ -948,6 +948,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		PinnedSyncers:           cfg.Gossip.PinnedSyncers,
 		MaxChannelUpdateBurst:   cfg.Gossip.MaxChannelUpdateBurst,
 		ChannelUpdateInterval:   cfg.Gossip.ChannelUpdateInterval,
+		IsAlias:                 htlcswitch.IsAlias,
 	}, nodeKeyDesc)
 
 	s.localChanMgr = &localchans.Manager{

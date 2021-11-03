@@ -24,19 +24,20 @@ var (
 // negotiateCommitmentType negotiates the commitment type of a newly opened
 // channel. If a channelType is provided, explicit negotiation for said type
 // will be attempted if the set of both local and remote features support it.
-// Otherwise, implicit negotiation will be attempted.
-func negotiateCommitmentType(channelType *lnwire.ChannelType,
-	local, remote *lnwire.FeatureVector, mustBeExplicit bool,
-) (bool, *lnwire.ChannelType, lnwallet.CommitmentType, error) {
+// Otherwise, implicit negotiation will be attempted. A bool is returned
+// indicating whether a zero-conf channel was negotiated.
+func negotiateCommitmentType(channelType *lnwire.ChannelType, local,
+	remote *lnwire.FeatureVector, mustBeExplicit bool) (bool,
+	*lnwire.ChannelType, lnwallet.CommitmentType, bool, error) {
 
 	if channelType != nil {
 		// If the peer does know explicit negotiation, let's attempt
 		// that now.
 		if hasFeatures(local, remote, lnwire.ExplicitChannelTypeOptional) {
-			chanType, err := explicitNegotiateCommitmentType(
+			chanType, zc, err := explicitNegotiateCommitmentType(
 				*channelType, local, remote,
 			)
-			return true, channelType, chanType, err
+			return true, channelType, chanType, zc, err
 		}
 
 		// If we're the funder, and we are attempting to use an
@@ -45,24 +46,62 @@ func negotiateCommitmentType(channelType *lnwire.ChannelType,
 		// user doesn't end up with an unexpected channel type via
 		// implicit negotiation.
 		if mustBeExplicit {
-			return false, nil, 0, errUnsupportedExplicitNegotiation
+			return false, nil, 0, false,
+				errUnsupportedExplicitNegotiation
 		}
 	}
 
 	chanType, commitType := implicitNegotiateCommitmentType(local, remote)
-	return false, chanType, commitType, nil
+	return false, chanType, commitType, false, nil
 }
 
 // explicitNegotiateCommitmentType attempts to explicitly negotiate for a
 // specific channel type. Since the channel type is comprised of a set of even
 // feature bits, we also make sure each feature is supported by both peers. An
-// error is returned if either peer does not support said channel type.
+// error is returned if either peer does not support said channel type. A bool
+// is returned indicating whether a zero-conf channel was negotiated.
 func explicitNegotiateCommitmentType(channelType lnwire.ChannelType,
-	local, remote *lnwire.FeatureVector) (lnwallet.CommitmentType, error) {
+	local, remote *lnwire.FeatureVector) (lnwallet.CommitmentType, bool,
+	error) {
 
 	channelFeatures := lnwire.RawFeatureVector(channelType)
 
 	switch {
+	// Lease script enforcement + anchors zero fee + static remote key +
+	// zero conf features only.
+	case channelFeatures.OnlyContains(
+		lnwire.ZeroConfRequired,
+		lnwire.ScriptEnforcedLeaseRequired,
+		lnwire.AnchorsZeroFeeHtlcTxRequired,
+		lnwire.StaticRemoteKeyRequired,
+	):
+		if !hasFeatures(
+			local, remote,
+			lnwire.ScidAliasOptional,
+			lnwire.ScriptEnforcedLeaseOptional,
+			lnwire.AnchorsZeroFeeHtlcTxOptional,
+			lnwire.StaticRemoteKeyOptional,
+		) {
+			return 0, false, errUnsupportedChannelType
+		}
+		return lnwallet.CommitmentTypeScriptEnforcedLease, true, nil
+
+	// Anchors zero fee + static remote key + zero conf features only.
+	case channelFeatures.OnlyContains(
+		lnwire.ZeroConfRequired,
+		lnwire.AnchorsZeroFeeHtlcTxRequired,
+		lnwire.StaticRemoteKeyRequired,
+	):
+		if !hasFeatures(
+			local, remote,
+			lnwire.ScidAliasOptional,
+			lnwire.AnchorsZeroFeeHtlcTxOptional,
+			lnwire.StaticRemoteKeyOptional,
+		) {
+			return 0, false, errUnsupportedChannelType
+		}
+		return lnwallet.CommitmentTypeAnchorsZeroFeeHtlcTx, true, nil
+
 	// Lease script enforcement + anchors zero fee + static remote key
 	// features only.
 	case channelFeatures.OnlyContains(
@@ -76,10 +115,9 @@ func explicitNegotiateCommitmentType(channelType lnwire.ChannelType,
 			lnwire.AnchorsZeroFeeHtlcTxOptional,
 			lnwire.StaticRemoteKeyOptional,
 		) {
-
-			return 0, errUnsupportedChannelType
+			return 0, false, errUnsupportedChannelType
 		}
-		return lnwallet.CommitmentTypeScriptEnforcedLease, nil
+		return lnwallet.CommitmentTypeScriptEnforcedLease, false, nil
 
 	// Anchors zero fee + static remote key features only.
 	case channelFeatures.OnlyContains(
@@ -91,24 +129,23 @@ func explicitNegotiateCommitmentType(channelType lnwire.ChannelType,
 			lnwire.AnchorsZeroFeeHtlcTxOptional,
 			lnwire.StaticRemoteKeyOptional,
 		) {
-
-			return 0, errUnsupportedChannelType
+			return 0, false, errUnsupportedChannelType
 		}
-		return lnwallet.CommitmentTypeAnchorsZeroFeeHtlcTx, nil
+		return lnwallet.CommitmentTypeAnchorsZeroFeeHtlcTx, false, nil
 
 	// Static remote key feature only.
 	case channelFeatures.OnlyContains(lnwire.StaticRemoteKeyRequired):
 		if !hasFeatures(local, remote, lnwire.StaticRemoteKeyOptional) {
-			return 0, errUnsupportedChannelType
+			return 0, false, errUnsupportedChannelType
 		}
-		return lnwallet.CommitmentTypeTweakless, nil
+		return lnwallet.CommitmentTypeTweakless, false, nil
 
 	// No features, use legacy commitment type.
 	case channelFeatures.IsEmpty():
-		return lnwallet.CommitmentTypeLegacy, nil
+		return lnwallet.CommitmentTypeLegacy, false, nil
 
 	default:
-		return 0, errUnsupportedChannelType
+		return 0, false, errUnsupportedChannelType
 	}
 }
 

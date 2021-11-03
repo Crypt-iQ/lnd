@@ -1155,6 +1155,12 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		return nil, err
 	}
 
+	// Wrap the DeleteChannelEdges method so that the funding manager can
+	// use it without depending on several layers of indirection.
+	deleteAliasEdge := func(scid lnwire.ShortChannelID) error {
+		return s.graphDB.DeleteChannelEdges(false, scid.ToUint64())
+	}
+
 	s.fundingMgr, err = funding.NewFundingManager(funding.Config{
 		NoWumboChans:       !cfg.ProtocolOptions.Wumbo(),
 		IDKey:              nodeKeyDesc.PubKey,
@@ -1173,15 +1179,16 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		SendAnnouncement: s.authGossiper.ProcessLocalAnnouncement,
 		NotifyWhenOnline: s.NotifyWhenOnline,
 		TempChanIDSeed:   chanIDSeed,
-		FindChannel: func(chanID lnwire.ChannelID) (
-			*channeldb.OpenChannel, error) {
+		FindChannel: func(node *btcec.PublicKey,
+			chanID lnwire.ChannelID) (*channeldb.OpenChannel,
+			error) {
 
-			dbChannels, err := s.chanStateDB.FetchAllChannels()
+			nodeChans, err := s.chanStateDB.FetchOpenChannels(node)
 			if err != nil {
 				return nil, err
 			}
 
-			for _, channel := range dbChannels {
+			for _, channel := range nodeChans {
 				if chanID.IsChanPoint(&channel.FundingOutpoint) {
 					return channel, nil
 				}
@@ -1339,6 +1346,10 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		RegisteredChains:              cfg.registeredChains,
 		MaxAnchorsCommitFeeRate: chainfee.SatPerKVByte(
 			s.cfg.MaxCommitFeeRateAnchors * 1000).FeePerKWeight(),
+		RequestAlias:    s.htlcSwitch.RequestAlias,
+		PutAlias:        s.htlcSwitch.PutPeerAlias,
+		GetAlias:        s.htlcSwitch.GetPeerAlias,
+		DeleteAliasEdge: deleteAliasEdge,
 	})
 	if err != nil {
 		return nil, err

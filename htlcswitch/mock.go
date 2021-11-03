@@ -654,6 +654,8 @@ type mockChannelLink struct {
 
 	shortChanID lnwire.ShortChannelID
 
+	otherShortChanID lnwire.ShortChannelID
+
 	chanID lnwire.ChannelID
 
 	peer lnpeer.Peer
@@ -663,6 +665,8 @@ type mockChannelLink struct {
 	packets chan *htlcPacket
 
 	eligible bool
+
+	private bool
 
 	htlcID uint64
 
@@ -706,15 +710,18 @@ func (f *mockChannelLink) deleteCircuit(pkt *htlcPacket) error {
 }
 
 func newMockChannelLink(htlcSwitch *Switch, chanID lnwire.ChannelID,
-	shortChanID lnwire.ShortChannelID, peer lnpeer.Peer, eligible bool,
+	shortChanID, otherShortChanID lnwire.ShortChannelID, peer lnpeer.Peer,
+	eligible, private bool,
 ) *mockChannelLink {
 
 	return &mockChannelLink{
-		htlcSwitch:  htlcSwitch,
-		chanID:      chanID,
-		shortChanID: shortChanID,
-		peer:        peer,
-		eligible:    eligible,
+		htlcSwitch:       htlcSwitch,
+		chanID:           chanID,
+		shortChanID:      shortChanID,
+		otherShortChanID: otherShortChanID,
+		peer:             peer,
+		eligible:         eligible,
+		private:          private,
 	}
 }
 
@@ -787,9 +794,13 @@ func (f *mockChannelLink) EligibleToForward() bool                      { return
 func (f *mockChannelLink) MayAddOutgoingHtlc(lnwire.MilliSatoshi) error { return nil }
 func (f *mockChannelLink) ShutdownIfChannelClean() error                { return nil }
 func (f *mockChannelLink) setLiveShortChanID(sid lnwire.ShortChannelID) { f.shortChanID = sid }
+func (f *mockChannelLink) IsPrivate() bool                              { return f.private }
 func (f *mockChannelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 	f.eligible = true
 	return f.shortChanID, nil
+}
+func (f *mockChannelLink) OtherShortChanID() lnwire.ShortChannelID {
+	return f.otherShortChanID
 }
 
 var _ ChannelLink = (*mockChannelLink)(nil)

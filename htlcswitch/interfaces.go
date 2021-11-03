@@ -142,6 +142,9 @@ type ChannelLink interface {
 	// Embed the dustHandler interface.
 	dustHandler
 
+	// IsPrivate returns true if the underlying channel is private.
+	IsPrivate() bool
+
 	// ChannelPoint returns the channel outpoint for the channel link.
 	ChannelPoint() *wire.OutPoint
 
@@ -149,6 +152,12 @@ type ChannelLink interface {
 	// short channel ID encodes the exact location in the main chain that
 	// the original funding output can be found.
 	ShortChanID() lnwire.ShortChannelID
+
+	// OtherShortChanID returns an alternative ShortChannelID for the
+	// channel. For option_scid_alias zero-conf channels, this will be the
+	// confirmed ShortChannelID. For regular option_scid_alias channels,
+	// this will be the alias.
+	OtherShortChanID() lnwire.ShortChannelID
 
 	// UpdateShortChanID updates the short channel ID for a link. This may
 	// be required in the event that a link is created before the short

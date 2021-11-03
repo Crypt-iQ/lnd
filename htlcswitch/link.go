@@ -594,6 +594,12 @@ func (l *channelLink) markReestablished() {
 	atomic.StoreInt32(&l.reestablished, 1)
 }
 
+// IsPrivate returns true if the underlying channel is private.
+func (l *channelLink) IsPrivate() bool {
+	state := l.channel.State()
+	return state.ChannelFlags&lnwire.FFAnnounceChannel == 0
+}
+
 // sampleNetworkFee samples the current fee rate on the network to get into the
 // chain in a timely manner. The returned value is expressed in fee-per-kw, as
 // this is the native rate used when computing the fee for commitment
@@ -710,6 +716,23 @@ func (l *channelLink) syncChanStates() error {
 			fundingLockedMsg := lnwire.NewFundingLocked(
 				l.ChanID(), nextRevocation,
 			)
+
+			// For option-scid-alias or zero-conf channels, ensure
+			// that we send over the alias in the funding_locked
+			// message.
+			scid := l.ShortChanID()
+			otherScid := l.OtherShortChanID()
+			if IsAlias(scid) {
+				// If the ShortChannelID is an alias, then
+				// this is a zero-conf channel.
+				fundingLockedMsg.AliasScid = &scid
+			} else if otherScid != hop.Source {
+				// If the ShortChannelID is not an alias, and
+				// the OtherShortChanID is not the default,
+				// then this is an option-scid-alias channel.
+				fundingLockedMsg.AliasScid = &otherScid
+			}
+
 			err = l.cfg.Peer.SendMessage(false, fundingLockedMsg)
 			if err != nil {
 				return fmt.Errorf("unable to re-send "+
@@ -2179,6 +2202,14 @@ func (l *channelLink) ShortChanID() lnwire.ShortChannelID {
 	return l.shortChanID
 }
 
+// OtherShortChanID returns the other SCID for the channel link. For
+// non-option_scid_alias channels, this is the default ShortChannelID.
+//
+// NOTE: Part of the ChannelLink interface.
+func (l *channelLink) OtherShortChanID() lnwire.ShortChannelID {
+	return l.channel.State().OtherShortChanID()
+}
+
 // UpdateShortChanID updates the short channel ID for a link. This may be
 // required in the event that a link is created before the short chan ID for it
 // is known, or a re-org occurs, and the funding transaction changes location
@@ -2198,29 +2229,7 @@ func (l *channelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 		return hop.Source, err
 	}
 
-	sid := l.channel.ShortChanID()
-
-	l.log.Infof("updating to short_chan_id=%v for chan_id=%v", sid, chanID)
-
-	l.Lock()
-	l.shortChanID = sid
-	l.Unlock()
-
-	go func() {
-		err := l.cfg.UpdateContractSignals(&contractcourt.ContractSignals{
-			ShortChanID: sid,
-		})
-		if err != nil {
-			l.log.Errorf("unable to update signals")
-		}
-	}()
-
-	// Now that the short channel ID has been properly updated, we can begin
-	// garbage collecting any forwarding packages we create.
-	l.wg.Add(1)
-	go l.fwdPkgGarbager()
-
-	return sid, nil
+	return hop.Source, nil
 }
 
 // ChanID returns the channel ID for the channel link. The channel ID is a more

@@ -247,8 +247,7 @@ type Switch struct {
 	indexMtx sync.RWMutex
 
 	// pendingLinkIndex holds links that have not had their final, live
-	// short_chan_id assigned. These links can be transitioned into the
-	// primary linkIndex by using UpdateShortChanID to load their live id.
+	// short_chan_id assigned.
 	pendingLinkIndex map[lnwire.ChannelID]ChannelLink
 
 	// links is a map of channel id and channel link which manages
@@ -297,6 +296,20 @@ type Switch struct {
 	// ack in the forwarding package of the outgoing link. This was added to
 	// make pipelining settles more efficient.
 	pendingSettleFails []channeldb.SettleFailRef
+
+	// aliasToReal is a map used for option_scid_alias links. The alias
+	// SCID is the key and the real, confirmed SCID is the value. This must
+	// be accessed with the indexMtx.
+	aliasToReal map[lnwire.ShortChannelID]lnwire.ShortChannelID
+
+	// realToAlias is a map used for option_scid_alias links. The real,
+	// confirmed SCID is the key and the alias SCID is the value. This must
+	// be accessed with the indexMtx.
+	realToAlias map[lnwire.ShortChannelID]lnwire.ShortChannelID
+
+	// aliasManager allows the Switch to expose various functions. The
+	// Switch uses the IsAlias function.
+	aliasManager *aliasStore
 }
 
 // New creates the new instance of htlc switch.
@@ -326,12 +339,17 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 		quit:              make(chan struct{}),
 	}
 
+	s.aliasToReal = make(map[lnwire.ShortChannelID]lnwire.ShortChannelID)
+	s.realToAlias = make(map[lnwire.ShortChannelID]lnwire.ShortChannelID)
+
 	s.mailOrchestrator = newMailOrchestrator(&mailOrchConfig{
 		fetchUpdate:    s.cfg.FetchLastChannelUpdate,
 		forwardPackets: s.ForwardPackets,
 		clock:          s.cfg.Clock,
 		expiry:         s.cfg.HTLCExpiry,
 	})
+
+	s.aliasManager = newAliasStore(cfg.DB)
 
 	return s, nil
 }
@@ -343,6 +361,29 @@ type resolutionMsg struct {
 	contractcourt.ResolutionMsg
 
 	doneChan chan struct{}
+}
+
+// RequestAlias is called by outside subsystems so that they can request a
+// channel alias. By managing the aliases, we can ensure that no two aliases
+// are the same. An error is returned if the request failed.
+func (s *Switch) RequestAlias() (lnwire.ShortChannelID, error) {
+	return s.aliasManager.requestAlias()
+}
+
+// PutPeerAlias is called by outside subsystems so that they can place a peer's
+// alias into the aliasStore.
+func (s *Switch) PutPeerAlias(chanID lnwire.ChannelID,
+	alias lnwire.ShortChannelID) error {
+
+	return s.aliasManager.putPeerAlias(chanID, alias)
+}
+
+// GetPeerAlias is called by outside subsystems so that they can retrieve a
+// peer's alias via the ChannelID.
+func (s *Switch) GetPeerAlias(chanID lnwire.ChannelID) (lnwire.ShortChannelID,
+	error) {
+
+	return s.aliasManager.getPeerAlias(chanID)
 }
 
 // ProcessContractResolution is called by active contract resolvers once a
@@ -785,10 +826,28 @@ func (s *Switch) getLocalLink(pkt *htlcPacket, htlc *lnwire.UpdateAddHTLC) (
 	// Try to find links by node destination.
 	s.indexMtx.RLock()
 	link, err := s.getLinkByShortID(pkt.outgoingChanID)
-	s.indexMtx.RUnlock()
+	defer s.indexMtx.RUnlock()
 	if err != nil {
-		log.Errorf("Link %v not found", pkt.outgoingChanID)
-		return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		// If the link was not found for the outgoingChanID, an outside
+		// subsystem may be using the confirmed SCID of a zero-conf
+		// channel. In this case, we'll consult the Switch maps to see
+		// if an alias exists and use the alias to lookup the link.
+		// This extra step is a consequence of not updating the Switch
+		// forwardingIndex when a zero-conf channel is confirmed. We
+		// don't need to change the outgoingChanID since the link will
+		// do that upon receiving the packet.
+		aliasID, ok := s.realToAlias[pkt.outgoingChanID]
+		if !ok {
+			log.Errorf("Link %v not found", pkt.outgoingChanID)
+			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		}
+
+		// An alias was found, so we'll use that to lookup the link.
+		link, err = s.getLinkByShortID(aliasID)
+		if err != nil {
+			log.Errorf("Link %v not found", aliasID)
+			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		}
 	}
 
 	if !link.EligibleToForward() {
@@ -1024,8 +1083,10 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		// same incoming and outgoing channel. If our node does not
 		// allow forwards of this nature, we fail the htlc early. This
 		// check is in place to disallow inefficiently routed htlcs from
-		// locking up our balance.
-		linkErr := checkCircularForward(
+		// locking up our balance. With option_scid_alias, we have to
+		// be doubly sure that the IDs aren't the same since one could
+		// be an alias.
+		linkErr := s.checkCircularForward(
 			packet.incomingChanID, packet.outgoingChanID,
 			s.cfg.AllowCircularRoute, htlc.PaymentHash,
 		)
@@ -1034,7 +1095,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		}
 
 		s.indexMtx.RLock()
-		targetLink, err := s.getLinkByShortID(packet.outgoingChanID)
+		targetLink, err := s.getLinkByMapping(packet)
 		if err != nil {
 			s.indexMtx.RUnlock()
 
@@ -1287,12 +1348,63 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 // checkCircularForward checks whether a forward is circular (arrives and
 // departs on the same link) and returns a link error if the switch is
 // configured to disallow this behaviour.
-func checkCircularForward(incoming, outgoing lnwire.ShortChannelID,
+func (s *Switch) checkCircularForward(incoming, outgoing lnwire.ShortChannelID,
 	allowCircular bool, paymentHash lntypes.Hash) *LinkError {
 
-	// If the route is not circular we do not need to perform any further
-	// checks.
-	if incoming != outgoing {
+	// If they are equal, we can skip the mapping checks.
+	if incoming == outgoing {
+		// The switch may be configured to allow circular routes, so
+		// just log and return nil.
+		if allowCircular {
+			log.Debugf("allowing circular route over link: %v "+
+				"(payment hash: %x)", incoming, paymentHash)
+			return nil
+		}
+
+		// Otherwise, we'll return a temporary channel failure.
+		return NewDetailedLinkError(
+			lnwire.NewTemporaryChannelFailure(nil),
+			OutgoingFailureCircularRoute,
+		)
+	}
+
+	// If both SCIDs are aliases, they are not the same channel.
+	if IsAlias(incoming) && IsAlias(outgoing) {
+		return nil
+	}
+
+	// If both SCIDs are confirmed IDs, they are not the same channel.
+	if !IsAlias(incoming) && !IsAlias(outgoing) {
+		return nil
+	}
+
+	var (
+		mappedScid lnwire.ShortChannelID
+		ok         bool
+	)
+
+	s.indexMtx.RLock()
+	defer s.indexMtx.RUnlock()
+
+	// If the outgoing SCID is an alias, we'll lookup the confirmed SCID to
+	// compare against the incoming SCID.
+	if IsAlias(outgoing) {
+		mappedScid, ok = s.aliasToReal[outgoing]
+		if !ok {
+			// If no mapping is found, we can return.
+			return nil
+		}
+	} else {
+		mappedScid, ok = s.realToAlias[outgoing]
+		if !ok {
+			// If no mapping is found, we can return.
+			return nil
+		}
+	}
+
+	// If we reached this point, then we can compare the mapping to the
+	// incoming SCID.
+	if incoming != mappedScid {
 		return nil
 	}
 
@@ -2106,6 +2218,35 @@ func (s *Switch) addLiveLink(link ChannelLink) {
 		s.interfaceIndex[peerPub] = make(map[lnwire.ChannelID]ChannelLink)
 	}
 	s.interfaceIndex[peerPub][link.ChanID()] = link
+
+	if IsAlias(link.ShortChanID()) {
+		// If the main ShortChanID is an alias, this is a zero-conf
+		// channel. If the confirmed SCID is not yet known, then we
+		// won't populate the maps.
+		if link.OtherShortChanID() == hop.Source {
+			// The confirmed SCID is not yet known.
+			return
+		}
+
+		// Populate the maps so the Switch can properly route for this
+		// channel.
+		s.realToAlias[link.OtherShortChanID()] = link.ShortChanID()
+		s.aliasToReal[link.ShortChanID()] = link.OtherShortChanID()
+	} else {
+		// Else, this is not a zero-conf channel. We'll need to check
+		// if this is an option_scid_alias channel. If it is, the
+		// OtherShortChanID will not be the default.
+		if link.OtherShortChanID() == hop.Source {
+			// This is not an option_scid_alias channel.
+			return
+		}
+
+		// Populate the maps so the Switch can properly route for this
+		// channel.
+		s.realToAlias[link.ShortChanID()] = link.OtherShortChanID()
+		s.aliasToReal[link.OtherShortChanID()] = link.ShortChanID()
+
+	}
 }
 
 // GetLink is used to initiate the handling of the get link command. The
@@ -2141,7 +2282,21 @@ func (s *Switch) GetLinkByShortID(chanID lnwire.ShortChannelID) (ChannelLink,
 	s.indexMtx.RLock()
 	defer s.indexMtx.RUnlock()
 
-	return s.getLinkByShortID(chanID)
+	link, err := s.getLinkByShortID(chanID)
+	if err != nil {
+		// If we failed to find the link under the passed-in SCID, we
+		// consult the Switch's alias maps to see if the confirmed SCID
+		// was used for a zero-conf channel.
+		aliasID, ok := s.realToAlias[chanID]
+		if !ok {
+			return nil, err
+		}
+
+		// An alias was found, use it to lookup if a link exists.
+		return s.getLinkByShortID(aliasID)
+	}
+
+	return link, nil
 }
 
 // getLinkByShortID attempts to return the link which possesses the target
@@ -2154,6 +2309,132 @@ func (s *Switch) getLinkByShortID(chanID lnwire.ShortChannelID) (ChannelLink, er
 		return nil, ErrChannelLinkNotFound
 	}
 
+	return link, nil
+}
+
+// getLinkByMapping attempts to fetch the link via the htlcPacket's
+// outgoingChanID, possibly using a mapping. If it finds the link via mapping,
+// the outgoingChanID will be changed so that an error can be properly
+// attributed when looping over linkErrs in handlePacketForward.
+//
+// * If the outgoingChanID is found in the forwardingIndex and it is an alias,
+// then the channel is a zero-conf option_scid_alias channel. Since the alias
+// was used, it is fine to forward on.
+//
+// * If the outgoingChanID is found in the forwardingIndex and it is not an
+// alias, we need to perform further checks.
+//   - If the link is public, we are able to forward along it since there is no
+//     privacy leak.
+//   - If the link is private, then if an alias mapping exists for it, we must
+//     fail to forward since the confirmed SCID was used. Otherwise, this is a
+//     privacy leak.
+//   - If the link is private, and there is no alias mapping, then this is a
+//     non-option_scid_alias private channel. We can forward along it.
+//
+// * If the outgoingChanID is not found in the forwardingIndex and it is an
+// alias, we'll check if a mapping exists to see if we're dealing with an
+// option_scid_alias channel.
+//   - If no mapping exists, there's nothing to do so we fail to forward.
+//   - If a mapping exists we can attempt to forward along the found link since
+//     the alias was used.
+//
+// * If the outgoingChanID is not found in the forwardingIndex and it is not an
+// alias, we'll check if a mapping exists.
+//   - If no mapping exists, there's nothing to do so we fail to forward.
+//   - If a mapping exists and the link is private, we'll fail to forward. This
+//     would be a privacy leak otherwise since the confirmed SCID was used for
+//     a private option_scid_alias channel.
+//   - If a mapping exists and the link is public, we'll forward.
+//
+// NOTE: This MUST be called with the indexMtx read lock held.
+func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
+	// Determine if this ShortChannelID is an alias or a confirmed SCID.
+	chanID := pkt.outgoingChanID
+	aliasID := IsAlias(chanID)
+
+	// Check whether the SCID is already in the forwardingIndex.
+	link, ok := s.forwardingIndex[chanID]
+	if ok {
+		// The chanID was found in the Switch's forwardingIndex. If the
+		// SCID is an alias, then this is fine to forward regardless of
+		// public/private.
+		if aliasID {
+			return link, nil
+		}
+
+		// chanID is not an alias. If the found link is public, we can
+		// forward.
+		if !link.IsPrivate() {
+			return link, nil
+		}
+
+		// If the found link is private, we need to check the Switch
+		// mappings to see if we need to reject the forward for privacy
+		// reasons. We'll check the realToAlias mapping.
+		_, ok := s.realToAlias[chanID]
+		if !ok {
+			// If no mapping exists, then this is a
+			// non-option_scid_alias private channel. We can return
+			// the link for forwarding.
+			return link, nil
+		}
+
+		// Otherwise, the confirmed SCID was used for a private
+		// option_scid_alias channel, and we must reject the forward.
+		return nil, ErrChannelLinkNotFound
+	}
+
+	// The chanID was not found in the Switch's forwardingIndex. We'll need
+	// to consult the Switch alias maps.
+	if aliasID {
+		// The chanID was an alias, so we'll consult the aliasToReal
+		// mapping.
+		realScid, ok := s.aliasToReal[chanID]
+		if !ok {
+			// If no mapping is found, we are unable to forward.
+			return nil, ErrChannelLinkNotFound
+		}
+
+		// A mapping was found. We'll use realScid to query the Switch
+		// forwardingIndex.
+		link, ok = s.forwardingIndex[realScid]
+		if !ok {
+			// If nothing was found, we are unable to forward.
+			return nil, ErrChannelLinkNotFound
+		}
+
+		// Proceed to forward along the found link. Also change the
+		// packet's outgoingChanID so that errors are properly
+		// attributed.
+		pkt.outgoingChanID = realScid
+		return link, nil
+	}
+
+	// If we reached this point, then chanID is a confirmed SCID. We'll
+	// consult the Switch mappings to determine whether to forward.
+	aliasScid, ok := s.realToAlias[chanID]
+	if !ok {
+		// If we were unable to find a mapping, we can't forward.
+		return nil, ErrChannelLinkNotFound
+	}
+
+	// A mapping exists, we'll now query the Switch forwardingIndex.
+	link, ok = s.forwardingIndex[aliasScid]
+	if !ok {
+		// If nothing was found, we can't forward.
+		return nil, ErrChannelLinkNotFound
+	}
+
+	// If the link is private, we are unable to forward along it since the
+	// real SCID was used and doing so would be a privacy leak.
+	if link.IsPrivate() {
+		return nil, ErrChannelLinkNotFound
+	}
+
+	// If we've reached this point, this is a public option_scid_alias
+	// channel, and we can forward along it. Also change the packet's
+	// outgoingChanID.
+	pkt.outgoingChanID = aliasScid
 	return link, nil
 }
 
@@ -2215,50 +2496,31 @@ func (s *Switch) removeLink(chanID lnwire.ChannelID) ChannelLink {
 	return link
 }
 
-// UpdateShortChanID updates the short chan ID for an existing channel. This is
-// required in the case of a re-org and re-confirmation or a channel, or in the
-// case that a link was added to the switch before its short chan ID was known.
+// UpdateShortChanID locates the link with the passed-in chanID and updates the
+// underlying channel state. This is only used in zero-conf channels to allow
+// the OtherShortChannelID to be updated.
 func (s *Switch) UpdateShortChanID(chanID lnwire.ChannelID) error {
 	s.indexMtx.Lock()
 	defer s.indexMtx.Unlock()
 
-	// Locate the target link in the pending link index. If no such link
-	// exists, then we will ignore the request.
-	link, ok := s.pendingLinkIndex[chanID]
+	// Locate the target link in the link index. If no such link exists,
+	// then we will ignore the request.
+	link, ok := s.linkIndex[chanID]
 	if !ok {
 		return fmt.Errorf("link %v not found", chanID)
 	}
 
-	oldShortChanID := link.ShortChanID()
-
-	// Try to update the link's short channel ID, returning early if this
-	// update failed.
-	shortChanID, err := link.UpdateShortChanID()
+	// Try to update the link's underlying channel state, returning early
+	// if this update failed.
+	_, err := link.UpdateShortChanID()
 	if err != nil {
 		return err
 	}
 
-	// Reject any blank short channel ids.
-	if shortChanID == hop.Source {
-		return fmt.Errorf("refusing trivial short_chan_id for chan_id=%v"+
-			"live link", chanID)
-	}
-
-	log.Infof("Updated short_chan_id for ChannelLink(%v): old=%v, new=%v",
-		chanID, oldShortChanID, shortChanID)
-
-	// Since the link was in the pending state before, we will remove it
-	// from the pending link index and add it to the live link index so that
-	// it can be available in forwarding.
-	delete(s.pendingLinkIndex, chanID)
-	s.addLiveLink(link)
-
-	// Finally, alert the mail orchestrator to the change of short channel
-	// ID, and deliver any unclaimed packets to the link.
-	mailbox := s.mailOrchestrator.GetOrCreateMailBox(chanID, shortChanID)
-	s.mailOrchestrator.BindLiveShortChanID(
-		mailbox, chanID, shortChanID,
-	)
+	// Since this is only called for zero-conf channels, and we know the
+	// OtherShortChanID will get set, we can set the mapping here.
+	s.realToAlias[link.OtherShortChanID()] = link.ShortChanID()
+	s.aliasToReal[link.ShortChanID()] = link.OtherShortChanID()
 
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightningnetwork/lnd/htlcswitch/hop"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/kvdb"
@@ -198,6 +199,10 @@ const (
 	// A tlv type definition used to serialize and deserialize a KeyLocator
 	// from the database.
 	keyLocType tlv.Type = 1
+
+	// A tlv type definition used to serialize and deserialize an extra
+	// ShortChannelID for option_scid_alias channels.
+	scidType tlv.Type = 2
 )
 
 // indexStatus is an enum-like type that describes what state the
@@ -262,6 +267,10 @@ const (
 	// period of time, constraining every output that pays to the channel
 	// initiator with an additional CLTV of the lease maturity.
 	LeaseExpirationBit ChannelType = 1 << 6
+
+	// ZeroConfBit indicates that the channel is a zero-conf channel and
+	// may be used before confirmation.
+	ZeroConfBit ChannelType = 1 << 7
 )
 
 // IsSingleFunder returns true if the channel type if one of the known single
@@ -309,6 +318,11 @@ func (c ChannelType) IsFrozen() bool {
 // HasLeaseExpiration returns true if the channel originated from a lease.
 func (c ChannelType) HasLeaseExpiration() bool {
 	return c&LeaseExpirationBit == LeaseExpirationBit
+}
+
+// IsZeroConf returns true if the channel is a zero-conf channel.
+func (c ChannelType) IsZeroConf() bool {
+	return c&ZeroConfBit == ZeroConfBit
 }
 
 // ChannelConstraints represents a set of constraints meant to allow a node to
@@ -612,6 +626,11 @@ type OpenChannel struct {
 	// ShortChannelID encodes the exact location in the chain in which the
 	// channel was initially confirmed. This includes: the block height,
 	// transaction index, and the output within the target transaction.
+	//
+	// If ChanType.IsZeroConf(), then this will be the ALIAS scid and the
+	// confirmed scid will be stored in OtherShortChannelID. The opposite
+	// will be true for regular option_scid_alias channels with the ALIAS
+	// scid being stored in OtherShortChannelID.
 	ShortChannelID lnwire.ShortChannelID
 
 	// IsPending indicates whether a channel's funding transaction has been
@@ -738,6 +757,11 @@ type OpenChannel struct {
 	// have private key isolation from lnd.
 	RevocationKeyLocator keychain.KeyLocator
 
+	// OtherShortChannelID is another ShortChannelID that this channel may
+	// be referred to. This is only populated for option_scid_alias
+	// channels and will be the empty ShortChannelID otherwise.
+	OtherShortChannelID lnwire.ShortChannelID
+
 	// TODO(roasbeef): eww
 	Db *ChannelStateDB
 
@@ -752,6 +776,22 @@ func (c *OpenChannel) ShortChanID() lnwire.ShortChannelID {
 	defer c.RUnlock()
 
 	return c.ShortChannelID
+}
+
+// OtherShortChanID returns the current ShortChannelID of this channel.
+func (c *OpenChannel) OtherShortChanID() lnwire.ShortChannelID {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.OtherShortChannelID
+}
+
+// IsOptionScidAlias returns whether option_scid_alias was negotiated.
+func (c *OpenChannel) IsOptionScidAlias() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.OtherShortChannelID != hop.Source
 }
 
 // ChanStatus returns the current ChannelStatus of this channel.
@@ -800,6 +840,15 @@ func (c *OpenChannel) hasChanStatus(status ChannelStatus) bool {
 	return c.chanStatus&status == status
 }
 
+// BroadcastHeight returns the internal FundingBroadcastHeight member, but
+// acquires the read lock in order to do so. This prevents race conditions in
+// certain cases.
+func (c *OpenChannel) BroadcastHeight() uint32 {
+	c.RLock()
+	defer c.RUnlock()
+	return c.FundingBroadcastHeight
+}
+
 // RefreshShortChanID updates the in-memory channel state using the latest
 // value observed on disk.
 //
@@ -822,6 +871,19 @@ func (c *OpenChannel) RefreshShortChanID() error {
 		// fetched from disk.
 		if err := fetchChanInfo(chanBucket, c); err != nil {
 			return fmt.Errorf("unable to fetch chan info: %v", err)
+		}
+
+		// Also populate the channel's commitment states for both sides
+		// of the channel.
+		if err := fetchChanCommitments(chanBucket, c); err != nil {
+			return fmt.Errorf("unable to fetch chan commitments: "+
+				"%v", err)
+		}
+
+		// Also retrieve the current revocation state.
+		if err := fetchChanRevocationState(chanBucket, c); err != nil {
+			return fmt.Errorf("unable to fetch chan revocations: "+
+				"%v", err)
 		}
 
 		return nil
@@ -941,6 +1003,20 @@ func (c *OpenChannel) fullSync(tx kvdb.RwTx) error {
 		return ErrChanAlreadyExists
 	}
 
+	cid := lnwire.NewChanIDFromOutPoint(&c.FundingOutpoint)
+	allOps := cid.GenPossibleOutPoints()
+	var otherOpBuf bytes.Buffer
+	for _, op := range allOps {
+		op := op
+		if err := writeOutpoint(&otherOpBuf, &op); err != nil {
+			return err
+		}
+		if opBucket.Get(otherOpBuf.Bytes()) != nil {
+			return ErrChanAlreadyExists
+		}
+		otherOpBuf.Reset()
+	}
+
 	status := uint8(outpointOpen)
 
 	// Write the status of this outpoint as the first entry in a tlv
@@ -1030,6 +1106,39 @@ func (c *OpenChannel) MarkAsOpen(openLoc lnwire.ShortChannelID) error {
 	c.IsPending = false
 	c.ShortChannelID = openLoc
 	c.Packager = NewChannelPackager(openLoc)
+
+	return nil
+}
+
+// MarkOtherScid marks the confirmed OtherShortChannelID for zero-conf
+// channels.
+func (c *OpenChannel) MarkOtherScid(otherScid lnwire.ShortChannelID) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if err := kvdb.Update(c.Db.backend, func(tx kvdb.RwTx) error {
+		chanBucket, err := fetchChanBucketRw(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel, err := fetchOpenChannel(
+			chanBucket, &c.FundingOutpoint,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel.OtherShortChannelID = otherScid
+
+		return putOpenChannel(chanBucket, channel)
+	}, func() {}); err != nil {
+		return err
+	}
+
+	c.OtherShortChannelID = otherScid
 
 	return nil
 }
@@ -3353,7 +3462,12 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 		keyLocType, &channel.RevocationKeyLocator,
 	)
 
-	tlvStream, err := tlv.NewStream(keyLocRecord)
+	// Write the OtherShortChannelID as the second entry in a tlv stream.
+	otherScidRecord := MakeScidRecord(
+		scidType, &channel.OtherShortChannelID,
+	)
+
+	tlvStream, err := tlv.NewStream(keyLocRecord, otherScidRecord)
 	if err != nil {
 		return err
 	}
@@ -3551,7 +3665,8 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 	}
 
 	keyLocRecord := MakeKeyLocRecord(keyLocType, &channel.RevocationKeyLocator)
-	tlvStream, err := tlv.NewStream(keyLocRecord)
+	scidRecord := MakeScidRecord(scidType, &channel.OtherShortChannelID)
+	tlvStream, err := tlv.NewStream(keyLocRecord, scidRecord)
 	if err != nil {
 		return err
 	}
@@ -3774,4 +3889,13 @@ func DKeyLocator(r io.Reader, val interface{}, buf *[8]byte, l uint64) error {
 // 8 as KeyFamily is uint32 and the Index is uint32.
 func MakeKeyLocRecord(typ tlv.Type, keyLoc *keychain.KeyLocator) tlv.Record {
 	return tlv.MakeStaticRecord(typ, keyLoc, 8, EKeyLocator, DKeyLocator)
+}
+
+// MakeScidRecord creates a Record out of a ShortChannelID using the passed
+// Type and the EShortChannelID and DShortChannelID functions. The size will
+// always be 8 for the ShortChannelID.
+func MakeScidRecord(typ tlv.Type, scid *lnwire.ShortChannelID) tlv.Record {
+	return tlv.MakeStaticRecord(
+		typ, scid, 8, lnwire.EShortChannelID, lnwire.DShortChannelID,
+	)
 }

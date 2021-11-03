@@ -27,6 +27,10 @@ type Config struct {
 	// NoScriptEnforcementLease unsets any bits signaling support for script
 	// enforced leases.
 	NoScriptEnforcementLease bool
+
+	// NoOptionScidAlias unsets any bits signalling support for
+	// option_scid_alias. This also disables zero-conf channels.
+	NoOptionScidAlias bool
 }
 
 // Manager is responsible for generating feature vectors for different requested
@@ -114,6 +118,10 @@ func newManager(cfg Config, desc setDesc) (*Manager, error) {
 		if cfg.NoScriptEnforcementLease {
 			raw.Unset(lnwire.ScriptEnforcedLeaseOptional)
 			raw.Unset(lnwire.ScriptEnforcedLeaseRequired)
+		}
+		if cfg.NoOptionScidAlias {
+			raw.Unset(lnwire.ScidAliasOptional)
+			raw.Unset(lnwire.ScidAliasRequired)
 		}
 
 		// Ensure that all of our feature sets properly set any

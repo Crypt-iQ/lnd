@@ -69,6 +69,7 @@ var deps = depDesc{
 		lnwire.ExplicitChannelTypeOptional:  {},
 		lnwire.AnchorsZeroFeeHtlcTxOptional: {},
 	},
+	lnwire.ScidAliasOptional: {},
 }
 
 // ValidateDeps asserts that a feature vector sets all features and their

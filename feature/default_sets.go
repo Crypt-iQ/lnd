@@ -68,4 +68,8 @@ var defaultSetDesc = setDesc{
 		SetInit:    {}, // I
 		SetNodeAnn: {}, // N
 	},
+	lnwire.ScidAliasOptional: {
+		SetInit:    {}, // I
+		SetNodeAnn: {}, // N
+	},
 }

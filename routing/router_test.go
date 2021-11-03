@@ -2017,7 +2017,7 @@ func TestDisconnectedBlocks(t *testing.T) {
 func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 	t.Parallel()
 
-	const startingBlockHeight = 101
+	const startingBlockHeight = 400000
 	ctx, cleanUp := createTestCtxSingleNode(t, startingBlockHeight)
 	defer cleanUp()
 
@@ -2095,12 +2095,12 @@ func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 			[]*wire.MsgTx{}, t)
 	}
 
-	// At this point, our starting height should be 107.
+	// At this point, our starting height should be our start height + 6.
 	_, chainHeight, err := ctx.chain.GetBestBlock()
 	if err != nil {
 		t.Fatalf("unable to get best block: %v", err)
 	}
-	if chainHeight != 107 {
+	if chainHeight != startingBlockHeight+6 {
 		t.Fatalf("incorrect chain height: expected %v, got %v",
 			107, chainHeight)
 	}
@@ -2137,12 +2137,12 @@ func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 			[]*wire.MsgTx{}, t)
 	}
 
-	// At this point, our starting height should be 112.
+	// At this point, our starting height should be our start height + 11.
 	_, chainHeight, err = ctx.chain.GetBestBlock()
 	if err != nil {
 		t.Fatalf("unable to get best block: %v", err)
 	}
-	if chainHeight != 112 {
+	if chainHeight != startingBlockHeight+11 {
 		t.Fatalf("incorrect chain height: expected %v, got %v",
 			112, chainHeight)
 	}
@@ -3454,10 +3454,16 @@ func TestChannelOnChainRejectionZombie(t *testing.T) {
 	ctx, cleanup := createTestCtxSingleNode(t, 0)
 	defer cleanup()
 
+	// We'll use a fundingHeight of 400000 so this isn't mistaken as an
+	// alias SCID.
+	const fundingHeight = 400000
+
 	// To start,  we'll make an edge for the channel, but we won't add the
 	// funding transaction to the mock blockchain, which should cause the
 	// validation to fail below.
-	edge, err := newChannelEdgeInfo(ctx, 1, edgeCreationNoFundingTx)
+	edge, err := newChannelEdgeInfo(
+		ctx, fundingHeight, edgeCreationNoFundingTx,
+	)
 	require.Nil(t, err)
 
 	// We expect this to fail as the transaction isn't present in the
@@ -3466,7 +3472,9 @@ func TestChannelOnChainRejectionZombie(t *testing.T) {
 
 	// Next, we'll make another channel edge, but actually add it to the
 	// graph this time.
-	edge, err = newChannelEdgeInfo(ctx, 2, edgeCreationNoUTXO)
+	edge, err = newChannelEdgeInfo(
+		ctx, fundingHeight+1, edgeCreationNoUTXO,
+	)
 	require.Nil(t, err)
 
 	// Instead now, we'll remove it from the set of UTXOs which should
@@ -3475,7 +3483,9 @@ func TestChannelOnChainRejectionZombie(t *testing.T) {
 
 	// If we cause the funding transaction the chain to fail validation, we
 	// should see similar behavior.
-	edge, err = newChannelEdgeInfo(ctx, 3, edgeCreationBadScript)
+	edge, err = newChannelEdgeInfo(
+		ctx, fundingHeight+2, edgeCreationBadScript,
+	)
 	require.Nil(t, err)
 	assertChanChainRejection(t, ctx, edge, ErrInvalidFundingOutput)
 }

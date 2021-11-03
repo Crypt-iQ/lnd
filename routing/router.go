@@ -1455,8 +1455,12 @@ func (r *ChannelRouter) processUpdate(msg interface{},
 		// If AssumeChannelValid is present, then we are unable to
 		// perform any of the expensive checks below, so we'll
 		// short-circuit our path straight to adding the edge to our
-		// graph.
-		if r.cfg.AssumeChannelValid {
+		// graph. If the passed ShortChannelID is an alias, then we'll
+		// skip validation as it will not map to a legitimate tx. This
+		// is not a DoS vector as only we can add a ChannelAnnouncement
+		// that the gossiper sees as premature.
+		scid := lnwire.NewShortChanIDFromInt(msg.ChannelID)
+		if r.cfg.AssumeChannelValid || htlcswitch.IsAlias(scid) {
 			if err := r.cfg.Graph.AddChannelEdge(msg, op...); err != nil {
 				return fmt.Errorf("unable to add edge: %v", err)
 			}

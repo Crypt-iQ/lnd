@@ -395,11 +395,15 @@ func TestEdgeUpdateNotification(t *testing.T) {
 	ctx, cleanUp := createTestCtxSingleNode(t, 0)
 	defer cleanUp()
 
+	// Use a fundingHeight of 400000 so that this is not mistaken as an
+	// alias SCID.
+	const fundingHeight = 400000
+
 	// First we'll create the utxo for the channel to be "closed"
 	const chanValue = 10000
 	fundingTx, chanPoint, chanID, err := createChannelEdge(ctx,
 		bitcoinKey1.SerializeCompressed(), bitcoinKey2.SerializeCompressed(),
-		chanValue, 0)
+		chanValue, fundingHeight)
 	if err != nil {
 		t.Fatalf("unable create channel edge: %v", err)
 	}
@@ -861,7 +865,7 @@ func TestNotificationCancellation(t *testing.T) {
 func TestChannelCloseNotification(t *testing.T) {
 	t.Parallel()
 
-	const startingBlockHeight = 101
+	const startingBlockHeight = 400000
 	ctx, cleanUp := createTestCtxSingleNode(t, startingBlockHeight)
 	defer cleanUp()
 
@@ -921,7 +925,7 @@ func TestChannelCloseNotification(t *testing.T) {
 	// Next, we'll simulate the closure of our channel by generating a new
 	// block at height 102 which spends the original multi-sig output of
 	// the channel.
-	blockHeight := uint32(102)
+	blockHeight := uint32(startingBlockHeight + 1)
 	newBlock := &wire.MsgBlock{
 		Transactions: []*wire.MsgTx{
 			{

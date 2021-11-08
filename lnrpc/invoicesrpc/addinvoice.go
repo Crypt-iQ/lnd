@@ -72,6 +72,10 @@ type AddInvoiceConfig struct {
 	// GenAmpInvoiceFeatures returns a feature containing feature bits that
 	// should be advertised on freshly generated AMP invoices.
 	GenAmpInvoiceFeatures func() *lnwire.FeatureVector
+
+	// GetAlias allows the peer's alias SCID to be retrieved for private
+	// option_scid_alias channels.
+	GetAlias func(lnwire.ChannelID) (lnwire.ShortChannelID, error)
 }
 
 // AddInvoiceData contains the required data to create a new invoice.
@@ -387,6 +391,13 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 					continue
 				}
 
+				// Also check whether the OtherShortChanID was
+				// provided as a RouteHint.
+				otherScid := c.OtherShortChanID().ToUint64()
+				if _, ok := forcedHints[otherScid]; ok {
+					continue
+				}
+
 				chanID := lnwire.NewChanIDFromOutPoint(
 					&c.FundingOutpoint,
 				)
@@ -529,10 +540,17 @@ func chanCanBeHopHint(channel *HopHintInfo, cfg *SelectHopHintsCfg) (
 	// Fetch the policies for each end of the channel.
 	info, p1, p2, err := cfg.FetchChannelEdgesByID(channel.ShortChannelID)
 	if err != nil {
-		log.Errorf("Unable to fetch the routing "+
-			"policies for the edges of the channel "+
-			"%v: %v", channel.ShortChannelID, err)
-		return nil, false
+		// In the case of zero-conf channels, it may be the case that
+		// the alias SCID was deleted from the graph, and replaced by
+		// the confirmed SCID. Check the Graph for the confirmed SCID.
+		otherScid := channel.OtherShortChannelID
+		info, p1, p2, err = cfg.FetchChannelEdgesByID(otherScid)
+		if err != nil {
+			log.Errorf("Unable to fetch the routing policies for "+
+				"the edges of the channel %v: %v",
+				channel.ShortChannelID, err)
+			return nil, false
+		}
 	}
 
 	// Now, we'll need to determine which is the correct policy for HTLCs
@@ -550,7 +568,8 @@ func chanCanBeHopHint(channel *HopHintInfo, cfg *SelectHopHintsCfg) (
 // addHopHint creates a hop hint out of the passed channel and channel policy.
 // The new hop hint is appended to the passed slice.
 func addHopHint(hopHints *[][]zpay32.HopHint,
-	channel *HopHintInfo, chanPolicy *channeldb.ChannelEdgePolicy) {
+	channel *HopHintInfo, chanPolicy *channeldb.ChannelEdgePolicy,
+	aliasScid lnwire.ShortChannelID) {
 
 	hopHint := zpay32.HopHint{
 		NodeID:      channel.RemotePubkey,
@@ -560,6 +579,11 @@ func addHopHint(hopHints *[][]zpay32.HopHint,
 			chanPolicy.FeeProportionalMillionths,
 		),
 		CLTVExpiryDelta: chanPolicy.TimeLockDelta,
+	}
+
+	var defaultScid lnwire.ShortChannelID
+	if aliasScid != defaultScid {
+		hopHint.ChannelID = aliasScid.ToUint64()
 	}
 
 	*hopHints = append(*hopHints, []zpay32.HopHint{hopHint})
@@ -587,18 +611,34 @@ type HopHintInfo struct {
 
 	// ShortChannelID is the short channel ID of the channel.
 	ShortChannelID uint64
+
+	// OtherShortChannelID is the other short channel ID of the channel.
+	// This will be the confirmed SCID for zero-conf channels.
+	OtherShortChannelID uint64
+
+	// IsOptionScidAlias denotes whether the channel has negotiated
+	// option-scid-alias and has an alias. This channel may also be a
+	// zero-conf channel. This may be false for zero-conf channels before
+	// confirmation.
+	IsOptionScidAlias bool
+
+	// ZeroConf denotes whether the channel is a zero-conf channel.
+	ZeroConf bool
 }
 
 func newHopHintInfo(c *channeldb.OpenChannel, isActive bool) *HopHintInfo {
 	isPublic := c.ChannelFlags&lnwire.FFAnnounceChannel != 0
 
 	return &HopHintInfo{
-		IsPublic:        isPublic,
-		IsActive:        isActive,
-		FundingOutpoint: c.FundingOutpoint,
-		RemotePubkey:    c.IdentityPub,
-		RemoteBalance:   c.LocalCommitment.RemoteBalance,
-		ShortChannelID:  c.ShortChannelID.ToUint64(),
+		IsPublic:            isPublic,
+		IsActive:            isActive,
+		FundingOutpoint:     c.FundingOutpoint,
+		RemotePubkey:        c.IdentityPub,
+		RemoteBalance:       c.LocalCommitment.RemoteBalance,
+		ShortChannelID:      c.ShortChannelID.ToUint64(),
+		OtherShortChannelID: c.OtherShortChanID().ToUint64(),
+		IsOptionScidAlias:   c.IsOptionScidAlias(),
+		ZeroConf:            c.ChanType.IsZeroConf(),
 	}
 }
 
@@ -615,12 +655,17 @@ type SelectHopHintsCfg struct {
 	FetchChannelEdgesByID func(chanID uint64) (*channeldb.ChannelEdgeInfo,
 		*channeldb.ChannelEdgePolicy, *channeldb.ChannelEdgePolicy,
 		error)
+
+	// GetAlias allows the peer's alias SCID to be retrieved for private
+	// option_scid_alias channels.
+	GetAlias func(lnwire.ChannelID) (lnwire.ShortChannelID, error)
 }
 
 func newSelectHopHintsCfg(invoicesCfg *AddInvoiceConfig) *SelectHopHintsCfg {
 	return &SelectHopHintsCfg{
 		IsPublicNode:          invoicesCfg.Graph.IsPublicNode,
 		FetchChannelEdgesByID: invoicesCfg.Graph.FetchChannelEdgesByID,
+		GetAlias:              invoicesCfg.GetAlias,
 	}
 }
 
@@ -693,9 +738,27 @@ func SelectHopHints(amtMSat lnwire.MilliSatoshi, cfg *SelectHopHintsCfg,
 			continue
 		}
 
+		// Lookup and see if there is an alias SCID that exists.
+		chanID := lnwire.NewChanIDFromOutPoint(
+			&channel.FundingOutpoint,
+		)
+		alias, _ := cfg.GetAlias(chanID)
+
+		// If this is an option_scid_alias channel or zero-conf channel
+		// and the alias is not yet assigned, we cannot issue an
+		// invoice. Doing so might expose the confirmed SCID of a
+		// private channel.
+		if channel.IsOptionScidAlias || channel.ZeroConf {
+
+			var defaultScid lnwire.ShortChannelID
+			if alias == defaultScid {
+				continue
+			}
+		}
+
 		// Now that we now this channel use usable, add it as a hop
 		// hint and the indexes we'll use later.
-		addHopHint(&hopHints, channel, edgePolicy)
+		addHopHint(&hopHints, channel, edgePolicy, alias)
 
 		hopHintChans[channel.FundingOutpoint] = struct{}{}
 		totalHintBandwidth += channel.RemoteBalance
@@ -733,9 +796,27 @@ func SelectHopHints(amtMSat lnwire.MilliSatoshi, cfg *SelectHopHintsCfg,
 			continue
 		}
 
+		// Lookup and see if there's an alias SCID that exists.
+		chanID := lnwire.NewChanIDFromOutPoint(
+			&channel.FundingOutpoint,
+		)
+		alias, _ := cfg.GetAlias(chanID)
+
+		// If this is an option_scid_alias channel or zero-conf channel
+		// and the alias is not yet assigned, we cannot issue an
+		// invoice. Doing so might expose the confirmed SCID of a
+		// private channel.
+		if channel.IsOptionScidAlias || channel.ZeroConf {
+
+			var defaultScid lnwire.ShortChannelID
+			if alias == defaultScid {
+				continue
+			}
+		}
+
 		// Include the route hint in our set of options that will be
 		// used when creating the invoice.
-		addHopHint(&hopHints, channel, remotePolicy)
+		addHopHint(&hopHints, channel, remotePolicy, alias)
 
 		// As we've just added a new hop hint, we'll accumulate it's
 		// available balance now to update our tally.

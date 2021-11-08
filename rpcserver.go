@@ -5223,6 +5223,7 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		GenAmpInvoiceFeatures: func() *lnwire.FeatureVector {
 			return r.server.featureMgr.Get(feature.SetInvoiceAmp)
 		},
+		GetAlias: r.server.htlcSwitch.GetPeerAlias,
 	}
 
 	value, err := lnrpc.UnmarshallAmt(invoice.Value, invoice.ValueMsat)

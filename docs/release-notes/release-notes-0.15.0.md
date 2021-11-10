@@ -4,6 +4,11 @@
 
 * [Misconfigured ZMQ
   setup now gets reported](https://github.com/lightningnetwork/lnd/pull/5710).
+  
+## Protocol Extensions
+
+### Zero-Conf Channel Opens
+* [Introduces support for zero-conf channel opens and non-zero-conf option_scid_alias channels.](https://github.com/lightningnetwork/lnd/pull/5955)
 
 ## `lncli`
 

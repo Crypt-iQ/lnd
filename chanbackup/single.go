@@ -180,6 +180,26 @@ func NewSingle(channel *channeldb.OpenChannel,
 		chanID.BlockHeight = channel.FundingBroadcastHeight
 	}
 
+	// If this is a zero-conf channel, we'll need to have separate logic
+	// depending on whether it's confirmed or not. This is because the
+	// ShortChanID is an alias.
+	if channel.ChanType.IsZeroConf() {
+		// If OtherShortChanID does exist, then this is confirmed and
+		// we'll use the confirmed SCID instead.
+		if channel.IsOptionScidAlias() {
+			chanID = channel.OtherShortChanID()
+		} else {
+			// If OtherShortChanID does not exist, then this is
+			// unconfirmed and we'll need to use the
+			// FundingBroadcastHeight and zero out TxIndex and
+			// TxPosition. This is so that openChannelShell works
+			// properly.
+			chanID.BlockHeight = channel.FundingBroadcastHeight
+			chanID.TxIndex = 0
+			chanID.TxPosition = 0
+		}
+	}
+
 	single := Single{
 		IsInitiator:      channel.IsInitiator,
 		ChainHash:        channel.ChainHash,

@@ -272,6 +272,21 @@ func (c *chainWatcher) Start() error {
 		heightHint = chanState.FundingBroadcastHeight
 	}
 
+	// Since we do not store the ZeroConfBit with SCB's, restored zero-conf
+	// channels will hit the above comparison to 0 and will skip the below
+	// logic. This logic is only called for non-restored zero-conf chans.
+	if chanState.ChanType.IsZeroConf() {
+		if chanState.IsOptionScidAlias() {
+			// If the zero-conf channel is confirmed, we'll use the
+			// OtherShortChanID BlockHeight.
+			heightHint = chanState.OtherShortChanID().BlockHeight
+		} else {
+			// The zero-conf channel is unconfirmed. We'll need to
+			// use the FundingBroadcastHeight.
+			heightHint = chanState.FundingBroadcastHeight
+		}
+	}
+
 	localKey := chanState.LocalChanCfg.MultiSigKey.PubKey.SerializeCompressed()
 	remoteKey := chanState.RemoteChanCfg.MultiSigKey.PubKey.SerializeCompressed()
 	multiSigScript, err := input.GenMultiSigScript(

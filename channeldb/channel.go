@@ -3244,7 +3244,25 @@ func (c *OpenChannel) AbsoluteThawHeight() (uint32, error) {
 			return 0, errors.New("cannot use relative thaw " +
 				"height for unconfirmed channel")
 		}
-		return c.ShortChannelID.BlockHeight + c.ThawHeight, nil
+
+		// For non-zero-conf channels, this is the base height to use.
+		blockHeightBase := c.ShortChannelID.BlockHeight
+
+		// If this is a zero-conf channel, the ShortChannelID will be
+		// an alias. If it doesn't have OtherShortChannelID set, it's
+		// unconfirmed.
+		if c.ChanType.IsZeroConf() {
+			if !c.IsOptionScidAlias() {
+				return 0, errors.New("cannot use relative " +
+					"height for unconfirmed zero-conf " +
+					"channel")
+			}
+
+			// Use the confirmed SCID's BlockHeight.
+			blockHeightBase = c.OtherShortChannelID.BlockHeight
+		}
+
+		return blockHeightBase + c.ThawHeight, nil
 	}
 
 	return c.ThawHeight, nil

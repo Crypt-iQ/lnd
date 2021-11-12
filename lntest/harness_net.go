@@ -983,6 +983,11 @@ type OpenChannelParams struct {
 	// CommitmentType is the commitment type that should be used for the
 	// channel to be opened.
 	CommitmentType lnrpc.CommitmentType
+
+	// ZeroConf is used to determine if the channel will be a zero-conf
+	// channel. This only works if the explicit negotiation is used with
+	// anchors or script enforced leases.
+	ZeroConf bool
 }
 
 // OpenChannel attempts to open a channel between srcNode and destNode with the
@@ -1021,6 +1026,7 @@ func (n *NetworkHarness) OpenChannel(srcNode, destNode *HarnessNode,
 		FundingShim:        p.FundingShim,
 		SatPerByte:         int64(p.SatPerVByte),
 		CommitmentType:     p.CommitmentType,
+		ZeroConf:           p.ZeroConf,
 	}
 
 	// We need to use n.runCtx here to keep the response stream alive after

@@ -210,6 +210,11 @@ var openChannelCommand = cli.Command{
 				"propose to the remote peer (%q, %q)",
 				channelTypeTweakless, channelTypeAnchors),
 		},
+		cli.BoolFlag{
+			Name: "zero_conf",
+			Usage: "(optional) whether a zero-conf channel open " +
+				"should be attempted.",
+		},
 	},
 	Action: actionDecorator(openChannel),
 }
@@ -249,6 +254,7 @@ func openChannel(ctx *cli.Context) error {
 		CloseAddress:               ctx.String("close_address"),
 		RemoteMaxValueInFlightMsat: ctx.Uint64("remote_max_value_in_flight_msat"),
 		MaxLocalCsv:                uint32(ctx.Uint64("max_local_csv")),
+		ZeroConf:                   ctx.Bool("zero_conf"),
 	}
 
 	switch {

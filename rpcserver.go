@@ -2000,18 +2000,30 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 
 	case lnrpc.CommitmentType_ANCHORS:
 		channelType = new(lnwire.ChannelType)
-		*channelType = lnwire.ChannelType(*lnwire.NewRawFeatureVector(
+		fv := lnwire.NewRawFeatureVector(
 			lnwire.StaticRemoteKeyRequired,
 			lnwire.AnchorsZeroFeeHtlcTxRequired,
-		))
+		)
+
+		if in.ZeroConf {
+			fv.Set(lnwire.ZeroConfRequired)
+		}
+
+		*channelType = lnwire.ChannelType(*fv)
 
 	case lnrpc.CommitmentType_SCRIPT_ENFORCED_LEASE:
 		channelType = new(lnwire.ChannelType)
-		*channelType = lnwire.ChannelType(*lnwire.NewRawFeatureVector(
+		fv := lnwire.NewRawFeatureVector(
 			lnwire.StaticRemoteKeyRequired,
 			lnwire.AnchorsZeroFeeHtlcTxRequired,
 			lnwire.ScriptEnforcedLeaseRequired,
-		))
+		)
+
+		if in.ZeroConf {
+			fv.Set(lnwire.ZeroConfRequired)
+		}
+
+		*channelType = lnwire.ChannelType(*fv)
 
 	default:
 		return nil, fmt.Errorf("unhandled request channel type %v",

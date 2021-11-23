@@ -383,4 +383,16 @@ var allTestCases = []*testCase{
 		name: "3rd party anchor spend",
 		test: testAnchorThirdPartySpend,
 	},
+	{
+		name: "zero conf channel open",
+		test: testZeroConfChannelOpen,
+	},
+	{
+		name: "private scid alias",
+		test: testPrivateOptionScidAlias,
+	},
+	{
+		name: "scid alias private update",
+		test: testUpdateChannelPolicyPrivateAlias,
+	},
 }

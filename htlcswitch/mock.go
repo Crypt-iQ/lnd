@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/go-errors/errors"
@@ -176,6 +177,12 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		}
 	}
 
+	signAliasUpdate := func(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
+		error) {
+
+		return testSig, nil
+	}
+
 	cfg := Config{
 		DB:                   db,
 		FetchAllOpenChannels: db.ChannelStateDB().FetchAllOpenChannels,
@@ -184,21 +191,24 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		FwdingLog: &mockForwardingLog{
 			events: make(map[time.Time]channeldb.ForwardingEvent),
 		},
-		FetchLastChannelUpdate: func(lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
-			return nil, nil
+		FetchLastChannelUpdate: func(scid lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
+			return &lnwire.ChannelUpdate{
+				ShortChannelID: scid,
+			}, nil
 		},
 		Notifier: &mock.ChainNotifier{
 			SpendChan: make(chan *chainntnfs.SpendDetail),
 			EpochChan: make(chan *chainntnfs.BlockEpoch),
 			ConfChan:  make(chan *chainntnfs.TxConfirmation),
 		},
-		FwdEventTicker: ticker.NewForce(DefaultFwdEventInterval),
-		LogEventTicker: ticker.NewForce(DefaultLogInterval),
-		AckEventTicker: ticker.NewForce(DefaultAckInterval),
-		HtlcNotifier:   &mockHTLCNotifier{},
-		Clock:          clock.NewDefaultClock(),
-		HTLCExpiry:     time.Hour,
-		DustThreshold:  DefaultDustThreshold,
+		FwdEventTicker:  ticker.NewForce(DefaultFwdEventInterval),
+		LogEventTicker:  ticker.NewForce(DefaultLogInterval),
+		AckEventTicker:  ticker.NewForce(DefaultAckInterval),
+		HtlcNotifier:    &mockHTLCNotifier{},
+		Clock:           clock.NewDefaultClock(),
+		HTLCExpiry:      time.Hour,
+		DustThreshold:   DefaultDustThreshold,
+		SignAliasUpdate: signAliasUpdate,
 	}
 
 	return New(cfg, startingHeight)
@@ -673,6 +683,9 @@ type mockChannelLink struct {
 	checkHtlcTransitResult *LinkError
 
 	checkHtlcForwardResult *LinkError
+
+	failAliasUpdate func(sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate
 }
 
 // completeCircuit is a helper method for adding the finalized payment circuit
@@ -756,7 +769,8 @@ func (f *mockChannelLink) HandleChannelUpdate(lnwire.Message) {
 func (f *mockChannelLink) UpdateForwardingPolicy(_ ForwardingPolicy) {
 }
 func (f *mockChannelLink) CheckHtlcForward([32]byte, lnwire.MilliSatoshi,
-	lnwire.MilliSatoshi, uint32, uint32, uint32) *LinkError {
+	lnwire.MilliSatoshi, uint32, uint32, uint32,
+	lnwire.ShortChannelID) *LinkError {
 
 	return f.checkHtlcForwardResult
 }
@@ -776,6 +790,12 @@ func (f *mockChannelLink) AttachMailBox(mailBox MailBox) {
 	f.mailBox = mailBox
 	f.packets = mailBox.PacketOutBox()
 	mailBox.SetDustClosure(f.getDustClosure())
+}
+
+func (f *mockChannelLink) AttachFailAliasUpdate(closure func(
+	sid lnwire.ShortChannelID, incoming bool) *lnwire.ChannelUpdate) {
+
+	f.failAliasUpdate = closure
 }
 
 func (f *mockChannelLink) Start() error {

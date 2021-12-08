@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -4298,5 +4299,651 @@ func TestSwitchMailboxDust(t *testing.T) {
 
 	case <-time.After(5 * time.Second):
 		t.Fatal("no timely reply from switch")
+	}
+}
+
+// TestSwitchForwardFailAlias tests that if ForwardPackets returns a failure
+// before actually forwarding, the ChannelUpdate uses the SCID from the
+// incoming channel and does not leak private information like the UTXO.
+func TestSwitchForwardFailAlias(t *testing.T) {
+	tests := []struct {
+		name string
+
+		// Whether or not Alice will be a zero-conf channel or an
+		// option-scid-alias channel.
+		zeroConf bool
+	}{
+		{
+			name:     "option-scid-alias forwarding failure",
+			zeroConf: false,
+		},
+		{
+			name:     "zero-conf forwarding failure",
+			zeroConf: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.name, func(t *testing.T) {
+			testSwitchForwardFailAlias(t, test.zeroConf)
+		})
+	}
+}
+
+func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
+	t.Parallel()
+
+	chanID1, chanID2, aliceChanID, bobChanID := genIDs()
+
+	alicePeer, err := newMockServer(
+		t, "alice", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	bobPeer, err := newMockServer(
+		t, "bob", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	tempPath, err := ioutil.TempDir("", "circuitdb")
+	require.NoError(t, err)
+
+	cdb, err := channeldb.Open(tempPath)
+	require.NoError(t, err)
+
+	s, err := initSwitchWithDB(testStartingHeight, cdb)
+	require.NoError(t, err)
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	// Make Alice's channel zero-conf or option-scid-alias.
+	aliceAlias := lnwire.ShortChannelID{
+		BlockHeight: 10000,
+		TxIndex:     5,
+		TxPosition:  5,
+	}
+
+	var aliceLink *mockChannelLink
+	if zeroConf {
+		aliceLink = newMockChannelLink(
+			s, chanID1, aliceAlias, aliceChanID, alicePeer, true,
+			true,
+		)
+	} else {
+		aliceLink = newMockChannelLink(
+			s, chanID1, aliceChanID, aliceAlias, alicePeer, true,
+			true,
+		)
+	}
+	err = s.AddLink(aliceLink)
+	require.NoError(t, err)
+
+	bobLink := newMockChannelLink(
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+	)
+	err = s.AddLink(bobLink)
+	require.NoError(t, err)
+
+	// Create a packet that will be sent from Alice to Bob via the switch.
+	preimage := [sha256.Size]byte{1}
+	rhash := sha256.Sum256(preimage[:])
+	ogPacket := &htlcPacket{
+		incomingChanID: aliceLink.ShortChanID(),
+		incomingHTLCID: 0,
+		outgoingChanID: bobLink.ShortChanID(),
+		obfuscator:     NewMockObfuscator(),
+		htlc: &lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
+			Amount:      1,
+		},
+	}
+
+	// Forward the packet and check that Bob's channel link received it.
+	err = s.ForwardPackets(nil, ogPacket)
+	require.NoError(t, err)
+
+	// Assert that the circuits are in the expected state.
+	require.Equal(t, 1, s.circuits.NumPending())
+	require.Equal(t, 0, s.circuits.NumOpen())
+
+	// Pull packet from Bob's link, and do nothing with it.
+	select {
+	case <-bobLink.packets:
+	case <-s.quit:
+		t.Fatal("switch shutting down, failed to forward packet")
+	}
+
+	// Now we will restart the Switch to trigger the LoadedFromDisk logic.
+	err = s.Stop()
+	require.NoError(t, err)
+
+	err = cdb.Close()
+	require.NoError(t, err)
+
+	cdb2, err := channeldb.Open(tempPath)
+	require.NoError(t, err)
+
+	s2, err := initSwitchWithDB(testStartingHeight, cdb2)
+	require.NoError(t, err)
+
+	err = s2.Start()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = s2.Stop()
+		_ = os.RemoveAll(tempPath)
+	}()
+
+	var aliceLink2 *mockChannelLink
+	if zeroConf {
+		aliceLink2 = newMockChannelLink(
+			s2, chanID1, aliceAlias, aliceChanID, alicePeer, true,
+			true,
+		)
+	} else {
+		aliceLink2 = newMockChannelLink(
+			s2, chanID1, aliceChanID, aliceAlias, alicePeer, true,
+			true,
+		)
+	}
+	err = s2.AddLink(aliceLink2)
+	require.NoError(t, err)
+
+	bobLink2 := newMockChannelLink(
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+	)
+	err = s2.AddLink(bobLink2)
+	require.NoError(t, err)
+
+	// Reforward the ogPacket and wait for Alice to receive a failure
+	// packet.
+	err = s2.ForwardPackets(nil, ogPacket)
+	require.NoError(t, err)
+
+	select {
+	case failPacket := <-aliceLink2.packets:
+		// Assert that the failPacket does not leak UTXO information.
+		// This means checking that aliceChanID was not returned.
+		msg := failPacket.linkFailure.msg
+		failMsg, ok := msg.(*lnwire.FailTemporaryChannelFailure)
+		require.True(t, ok)
+		require.Equal(t, aliceAlias, failMsg.Update.ShortChannelID)
+	case <-s2.quit:
+		t.Fatal("switch shutting down, failed to forward packet")
+	}
+}
+
+// TestSwitchAliasFailAdd tests that the mailbox does not leak UTXO information
+// when failing back an HTLC due to the 5-second timeout. This is tested in the
+// switch rather than the mailbox because the mailbox tests do not have the
+// proper context (e.g. the Switch's failAliasUpdate function). The caveat here
+// is that if the private UTXO is already known, it is fine to send a failure
+// back. This tests option-scid-alias and zero-conf channels.
+func TestSwitchAliasFailAdd(t *testing.T) {
+	tests := []struct {
+		name string
+
+		// Denotes whether the opened channel will be zero-conf or
+		// option-scid-alias.
+		zeroConf bool
+
+		// Denotes whether the opened channel will be private.
+		private bool
+
+		// Denotes whether the alias was used during forwarding.
+		useAlias bool
+	}{
+		{
+			name:     "public zero-conf using alias",
+			zeroConf: true,
+			private:  false,
+			useAlias: true,
+		},
+		{
+			name:     "public zero-conf using real",
+			zeroConf: true,
+			private:  false,
+			useAlias: true,
+		},
+		{
+			name:     "private zero-conf using alias",
+			zeroConf: true,
+			private:  true,
+			useAlias: true,
+		},
+		{
+			name:     "public option-scid-alias using alias",
+			zeroConf: false,
+			private:  false,
+			useAlias: true,
+		},
+		{
+			name:     "public option-scid-alias using real",
+			zeroConf: false,
+			private:  false,
+			useAlias: false,
+		},
+		{
+			name:     "private option-scid-alias using alias",
+			zeroConf: false,
+			private:  true,
+			useAlias: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.name, func(t *testing.T) {
+			testSwitchAliasFailAdd(
+				t, test.zeroConf, test.private, test.useAlias,
+			)
+		})
+	}
+}
+
+func testSwitchAliasFailAdd(t *testing.T, zeroConf, private, useAlias bool) {
+	t.Parallel()
+
+	chanID1, chanID2, aliceChanID, bobChanID := genIDs()
+
+	alicePeer, err := newMockServer(
+		t, "alice", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	bobPeer, err := newMockServer(
+		t, "bob", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	tempPath, err := ioutil.TempDir("", "circuitdb")
+	require.NoError(t, err)
+
+	cdb, err := channeldb.Open(tempPath)
+	require.NoError(t, err)
+
+	s, err := initSwitchWithDB(testStartingHeight, cdb)
+	require.NoError(t, err)
+
+	// Change the mailOrchestrator's expiry to a second.
+	s.mailOrchestrator.cfg.expiry = time.Second
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = s.Stop()
+		_ = os.RemoveAll(tempPath)
+	}()
+
+	// Make Alice's channel zero-conf or option-scid-alias.
+	aliceAlias := lnwire.ShortChannelID{
+		BlockHeight: 10000,
+		TxIndex:     5,
+		TxPosition:  5,
+	}
+
+	var aliceLink *mockChannelLink
+	if zeroConf {
+		aliceLink = newMockChannelLink(
+			s, chanID1, aliceAlias, aliceChanID, alicePeer, true,
+			private,
+		)
+	} else {
+		aliceLink = newMockChannelLink(
+			s, chanID1, aliceChanID, aliceAlias, alicePeer, true,
+			private,
+		)
+	}
+	err = s.AddLink(aliceLink)
+	require.NoError(t, err)
+
+	bobLink := newMockChannelLink(
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, true,
+	)
+	err = s.AddLink(bobLink)
+	require.NoError(t, err)
+
+	// Create a packet that Bob will send to Alice via ForwardPackets.
+	preimage := [sha256.Size]byte{1}
+	rhash := sha256.Sum256(preimage[:])
+	ogPacket := &htlcPacket{
+		incomingChanID: bobLink.ShortChanID(),
+		incomingHTLCID: 0,
+		obfuscator:     NewMockObfuscator(),
+		htlc: &lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
+			Amount:      1,
+		},
+	}
+
+	// Determine which outgoingChanID to set based on the useAlias boolean.
+	outgoingChanID := aliceChanID
+	if useAlias {
+		outgoingChanID = aliceAlias
+	}
+
+	ogPacket.outgoingChanID = outgoingChanID
+
+	// Forward the packet so Alice's mailbox fails it backwards.
+	err = s.ForwardPackets(nil, ogPacket)
+	require.NoError(t, err)
+
+	// Assert that the circuits are in the expected state.
+	require.Equal(t, 1, s.circuits.NumPending())
+	require.Equal(t, 0, s.circuits.NumOpen())
+
+	// Wait to receive the packet from Bob's mailbox.
+	select {
+	case failPacket := <-bobLink.packets:
+		// Assert that failPacket returns the expected SCID in the
+		// ChannelUpdate.
+		msg := failPacket.linkFailure.msg
+		failMsg, ok := msg.(*lnwire.FailTemporaryChannelFailure)
+		require.True(t, ok)
+		require.Equal(t, outgoingChanID, failMsg.Update.ShortChannelID)
+	case <-s.quit:
+		t.Fatal("switch shutting down, failed to receive fail packet")
+	}
+}
+
+// TestSwitchHandlePacketForwardAlias checks that handlePacketForward (which
+// calls CheckHtlcForward) does not leak the UTXO in a failure message for
+// alias channels. This test requires us to have a REAL link, which we also
+// must modify in order to test it properly (e.g. making it a private channel).
+// This doesn't lead to good code, but short of refactoring the link-generation
+// code there is not a good alternative.
+func TestSwitchHandlePacketForward(t *testing.T) {
+	tests := []struct {
+		name string
+
+		// Denotes whether or not the channel will be zero-conf or
+		// option-scid-alias.
+		zeroConf bool
+
+		// Denotes whether or not the channel will be private.
+		private bool
+
+		// Denotes whether or not the alias will be used for
+		// forwarding.
+		useAlias bool
+	}{
+		{
+			name:     "public zero-conf using alias",
+			zeroConf: true,
+			private:  false,
+			useAlias: true,
+		},
+		{
+			name:     "public zero-conf using real",
+			zeroConf: true,
+			private:  false,
+			useAlias: false,
+		},
+		{
+			name:     "private zero-conf using alias",
+			zeroConf: true,
+			private:  true,
+			useAlias: true,
+		},
+		{
+			name:     "public option-scid-alias using alias",
+			zeroConf: false,
+			private:  false,
+			useAlias: true,
+		},
+		{
+			name:     "public option-scid-alias using real",
+			zeroConf: false,
+			private:  false,
+			useAlias: false,
+		},
+		{
+			name:     "private option-scid-alias using alias",
+			zeroConf: false,
+			private:  true,
+			useAlias: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.name, func(t *testing.T) {
+			testSwitchHandlePacketForward(
+				t, test.zeroConf, test.private, test.useAlias,
+			)
+		})
+	}
+}
+
+func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
+	useAlias bool) {
+
+	t.Parallel()
+
+	// Create a link for Alice that we'll add to the switch.
+	aliceLink, _, _, _, cleanUp, _, err :=
+		newSingleLinkTestHarness(btcutil.SatoshiPerBitcoin, 0)
+	require.NoError(t, err)
+	defer cleanUp()
+
+	s, err := initSwitchWithDB(testStartingHeight, nil)
+	if err != nil {
+		t.Fatalf("unable to init switch: %v", err)
+	}
+	if err := s.Start(); err != nil {
+		t.Fatalf("unable to start switch: %v", err)
+	}
+	defer func() {
+		_ = s.Stop()
+	}()
+
+	// Change Alice's ShortChanID and OtherShortChanID here.
+	aliceAlias := lnwire.ShortChannelID{
+		BlockHeight: 10000,
+		TxIndex:     5,
+		TxPosition:  5,
+	}
+
+	aliceChannelLink := aliceLink.(*channelLink)
+	aliceChannelState := aliceChannelLink.channel.State()
+
+	if !private {
+		// Change the channel to public depending on the test.
+		aliceChannelState.ChannelFlags = lnwire.FFAnnounceChannel
+	}
+
+	aliceScid := aliceLink.ShortChanID()
+	if zeroConf {
+		// Store the alias in the shortChanID field and put the
+		// generated ShortChannelID in the OtherShortChannelID field.
+		aliceChannelLink.shortChanID = aliceAlias
+		aliceChannelState.OtherShortChannelID = aliceScid
+	} else {
+		// In the option-scid-alias case, we just need to store the
+		// alias in OtherShortChannelID.
+		aliceChannelState.OtherShortChannelID = aliceAlias
+	}
+
+	err = s.AddLink(aliceLink)
+	require.NoError(t, err)
+
+	// Add a mockChannelLink for Bob.
+	bobChanID, bobScid := genID()
+	bobPeer, err := newMockServer(
+		t, "bob", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	bobLink := newMockChannelLink(
+		s, bobChanID, bobScid, emptyScid, bobPeer, true, false,
+	)
+	err = s.AddLink(bobLink)
+	require.NoError(t, err)
+
+	preimage := [sha256.Size]byte{1}
+	rhash := sha256.Sum256(preimage[:])
+	ogPacket := &htlcPacket{
+		incomingChanID: bobLink.ShortChanID(),
+		incomingHTLCID: 0,
+		obfuscator:     NewMockObfuscator(),
+		htlc: &lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
+			Amount:      1,
+		},
+	}
+
+	// Determine which outgoingChanID to set based on the useAlias bool.
+	outgoingChanID := aliceScid
+	if useAlias {
+		outgoingChanID = aliceAlias
+	}
+
+	ogPacket.outgoingChanID = outgoingChanID
+
+	// Forward the packet to Alice and she should fail it back with an
+	// AmountBelowMinimum FailureMessage.
+	err = s.ForwardPackets(nil, ogPacket)
+	require.NoError(t, err)
+
+	select {
+	case failPacket := <-bobLink.packets:
+		// Assert that failPacket returns the expected ChannelUpdate.
+		msg := failPacket.linkFailure.msg
+		failMsg, ok := msg.(*lnwire.FailAmountBelowMinimum)
+		require.True(t, ok)
+		require.Equal(t, outgoingChanID, failMsg.Update.ShortChannelID)
+	case <-s.quit:
+		t.Fatal("switch shutting down, failed to receive failure")
+	}
+}
+
+// TestSwitchAliasInterceptFail tests that when the InterceptableSwitch fails
+// an incoming HTLC, it does not leak the on-chain UTXO for option-scid-alias
+// or zero-conf channels.
+func TestSwitchAliasInterceptFail(t *testing.T) {
+	tests := []struct {
+		name string
+
+		// Denotes whether or not the incoming channel is a zero-conf
+		// channel or an option-scid-alias channel instead.
+		zeroConf bool
+	}{
+		{
+			name:     "option-scid-alias",
+			zeroConf: false,
+		},
+		{
+			name:     "zero-conf",
+			zeroConf: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.name, func(t *testing.T) {
+			testSwitchAliasInterceptFail(t, test.zeroConf)
+		})
+	}
+}
+
+func testSwitchAliasInterceptFail(t *testing.T, zeroConf bool) {
+	t.Parallel()
+
+	chanID, aliceScid := genID()
+
+	alicePeer, err := newMockServer(
+		t, "alice", testStartingHeight, nil, testDefaultDelta,
+	)
+	require.NoError(t, err)
+
+	tempPath, err := ioutil.TempDir("", "circuitdb")
+	require.NoError(t, err)
+
+	cdb, err := channeldb.Open(tempPath)
+	require.NoError(t, err)
+
+	s, err := initSwitchWithDB(testStartingHeight, cdb)
+	require.NoError(t, err)
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = s.Stop()
+		_ = os.RemoveAll(tempPath)
+	}()
+
+	// Make Alice's alias here.
+	aliceAlias := lnwire.ShortChannelID{
+		BlockHeight: 10000,
+		TxIndex:     5,
+		TxPosition:  5,
+	}
+
+	var aliceLink *mockChannelLink
+	if zeroConf {
+		aliceLink = newMockChannelLink(
+			s, chanID, aliceAlias, aliceScid, alicePeer, true,
+			true,
+		)
+	} else {
+		aliceLink = newMockChannelLink(
+			s, chanID, aliceScid, aliceAlias, alicePeer, true,
+			true,
+		)
+	}
+	err = s.AddLink(aliceLink)
+	require.NoError(t, err)
+
+	// Now we'll create the packet that will be sent from the Alice link.
+	preimage := [sha256.Size]byte{1}
+	rhash := sha256.Sum256(preimage[:])
+	ogPacket := &htlcPacket{
+		incomingChanID: aliceLink.ShortChanID(),
+		incomingHTLCID: 0,
+		outgoingChanID: lnwire.ShortChannelID{},
+		obfuscator:     NewMockObfuscator(),
+		htlc: &lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
+			Amount:      1,
+		},
+	}
+
+	// Now setup the interceptable switch so that we can reject this
+	// packet.
+	forwardInterceptor := &mockForwardInterceptor{}
+	interceptSwitch := NewInterceptableSwitch(s)
+	interceptSwitch.SetInterceptor(forwardInterceptor.InterceptForwardHtlc)
+
+	err = interceptSwitch.ForwardPackets(nil, ogPacket)
+	require.NoError(t, err)
+
+	err = forwardInterceptor.fail()
+	require.NoError(t, err)
+
+	select {
+	case failPacket := <-aliceLink.packets:
+		// Assert that failPacket returns the expected ChannelUpdate.
+		failHtlc, ok := failPacket.htlc.(*lnwire.UpdateFailHTLC)
+		require.True(t, ok)
+
+		r := bytes.NewReader(failHtlc.Reason)
+		failure, err := lnwire.DecodeFailure(r, 0)
+		require.NoError(t, err)
+
+		failureMsg, ok := failure.(*lnwire.FailTemporaryChannelFailure)
+		require.True(t, ok)
+
+		require.Equal(t, aliceAlias, failureMsg.Update.ShortChannelID)
+
+	case <-s.quit:
+		t.Fatalf("switch shutting down, failed to receive failure")
 	}
 }

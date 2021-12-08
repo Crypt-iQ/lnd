@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/davecgh/go-spew/spew"
@@ -200,6 +201,13 @@ type Config struct {
 	// DustThreshold is the threshold in milli-satoshis after which we'll
 	// fail incoming or outgoing dust payments for a particular channel.
 	DustThreshold lnwire.MilliSatoshi
+
+	// SignAliasUpdate is used when sending FailureMessages backwards for
+	// option_scid_alias channels. This avoids a potential privacy leak by
+	// replacing the public, confirmed SCID with the alias in the
+	// ChannelUpdate.
+	SignAliasUpdate func(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
+		error)
 }
 
 // Switch is the central messaging bus for all incoming/outgoing HTLCs.
@@ -343,10 +351,11 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 	s.realToAlias = make(map[lnwire.ShortChannelID]lnwire.ShortChannelID)
 
 	s.mailOrchestrator = newMailOrchestrator(&mailOrchConfig{
-		fetchUpdate:    s.cfg.FetchLastChannelUpdate,
-		forwardPackets: s.ForwardPackets,
-		clock:          s.cfg.Clock,
-		expiry:         s.cfg.HTLCExpiry,
+		fetchUpdate:     s.cfg.FetchLastChannelUpdate,
+		forwardPackets:  s.ForwardPackets,
+		clock:           s.cfg.Clock,
+		expiry:          s.cfg.HTLCExpiry,
+		failAliasUpdate: s.failAliasUpdate,
 	})
 
 	s.aliasManager = newAliasStore(cfg.DB)
@@ -747,14 +756,28 @@ func (s *Switch) ForwardPackets(linkQuit chan struct{},
 	// failures.
 	if len(failedPackets) > 0 {
 		var failure lnwire.FailureMessage
-		update, err := s.cfg.FetchLastChannelUpdate(
-			failedPackets[0].incomingChanID,
-		)
-		if err != nil {
-			failure = &lnwire.FailTemporaryNodeFailure{}
+		incomingID := failedPackets[0].incomingChanID
+
+		// If the incoming channel is an option_scid_alias channel,
+		// then we'll need to replace the SCID in the ChannelUpdate.
+		update := s.failAliasUpdate(incomingID, true)
+		if update == nil {
+			// Fallback to the original non-option behavior.
+			update, err := s.cfg.FetchLastChannelUpdate(
+				incomingID,
+			)
+			if err != nil {
+				failure = &lnwire.FailTemporaryNodeFailure{}
+			} else {
+				failure = lnwire.NewTemporaryChannelFailure(
+					update,
+				)
+			}
 		} else {
+			// This is an option_scid_alias channel.
 			failure = lnwire.NewTemporaryChannelFailure(update)
 		}
+
 		linkError := NewDetailedLinkError(
 			failure, OutgoingFailureIncompleteForward,
 		)
@@ -1143,6 +1166,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					htlc.PaymentHash, packet.incomingAmount,
 					packet.amount, packet.incomingTimeout,
 					packet.outgoingTimeout, currentHeight,
+					packet.originalOutgoingChanID,
 				)
 			}
 
@@ -2178,6 +2202,9 @@ func (s *Switch) AddLink(link ChannelLink) error {
 	mailbox := s.mailOrchestrator.GetOrCreateMailBox(chanID, shortChanID)
 	link.AttachMailBox(mailbox)
 
+	// Attach the Switch's failAliasUpdate function to the link.
+	link.AttachFailAliasUpdate(s.failAliasUpdate)
+
 	if err := link.Start(); err != nil {
 		s.removeLink(chanID)
 		return err
@@ -2351,6 +2378,10 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	// Determine if this ShortChannelID is an alias or a confirmed SCID.
 	chanID := pkt.outgoingChanID
 	aliasID := IsAlias(chanID)
+
+	// Set the originalOutgoingChanID so the proper channel_update can be
+	// sent back for option_scid_alias channels.
+	pkt.originalOutgoingChanID = chanID
 
 	// Check whether the SCID is already in the forwardingIndex.
 	link, ok := s.forwardingIndex[chanID]
@@ -2688,4 +2719,100 @@ func (s *Switch) evaluateDustThreshold(link ChannelLink,
 
 	// If we reached this point, this HTLC is fine to forward.
 	return false
+}
+
+// failAliasUpdate prepares a ChannelUpdate for a failed incoming or outgoing
+// HTLC on an option-scid-alias channel. If the associated channel is not an
+// option-scid-alias channel, this function will return nil and the caller is
+// expected to handle this gracefully. In this case, a return to the original
+// non-alias behavior is expected.
+func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
+	incoming bool) *lnwire.ChannelUpdate {
+
+	// This function does not defer the unlocking because of the database
+	// lookups for ChannelUpdate.
+	s.indexMtx.RLock()
+
+	if IsAlias(scid) {
+		// The alias SCID was used. In the incoming case this means
+		// the channel is zero-conf as the link sets the scid. In the
+		// outgoing case, the sender set the scid to use and may be
+		// either the alias or the confirmed one, if it exists.
+		realScid, ok := s.aliasToReal[scid]
+		if !ok {
+			s.indexMtx.RUnlock()
+
+			// The real, confirmed SCID does not exist yet. Use the
+			// alias for lookup. No SCID replacement is necessary.
+			update, err := s.cfg.FetchLastChannelUpdate(scid)
+			if err != nil {
+				return nil
+			}
+
+			return update
+		}
+
+		s.indexMtx.RUnlock()
+
+		// Fetch the SCID via the confirmed SCID and replace it with
+		// the alias.
+		update, err := s.cfg.FetchLastChannelUpdate(realScid)
+		if err != nil {
+			return nil
+		}
+
+		// In the incoming case, we want to ensure that we don't leak
+		// the UTXO in case the channel is private. In the outgoing
+		// case, since the alias was used, we do the same thing.
+		update.ShortChannelID = scid
+		sig, err := s.cfg.SignAliasUpdate(update)
+		if err != nil {
+			return nil
+		}
+
+		update.Signature, err = lnwire.NewSigFromSignature(sig)
+		if err != nil {
+			return nil
+		}
+
+		return update
+	}
+
+	// This will only be an option-scid-alias channel if a mapping exists
+	// in realToAlias. If a mapping does not exist, return.
+	aliasScid, ok := s.realToAlias[scid]
+	if !ok {
+		s.indexMtx.RUnlock()
+		return nil
+	}
+
+	s.indexMtx.RUnlock()
+
+	// Fetch the ChannelUpdate via the real, confirmed SCID.
+	update, err := s.cfg.FetchLastChannelUpdate(scid)
+	if err != nil {
+		return nil
+	}
+
+	// The incoming case will replace the ShortChannelID in the retrieved
+	// ChannelUpdate with the alias to ensure no privacy leak occurs. This
+	// would happen if a private option-scid-alias channel w/o zero-conf
+	// leaked its UTXO here rather than supplying an alias. In the outgoing
+	// case, the confirmed SCID was actually used for forwarding in the
+	// onion, so no replacement is necessary as the sender knows the scid.
+	if incoming {
+		// We will replace and sign the update with the aliasScid.
+		update.ShortChannelID = aliasScid
+		sig, err := s.cfg.SignAliasUpdate(update)
+		if err != nil {
+			return nil
+		}
+
+		update.Signature, err = lnwire.NewSigFromSignature(sig)
+		if err != nil {
+			return nil
+		}
+	}
+
+	return update
 }

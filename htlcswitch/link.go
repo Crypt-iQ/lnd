@@ -294,6 +294,11 @@ type ChannelLinkConfig struct {
 	// HtlcNotifier is an instance of a htlcNotifier which we will pipe htlc
 	// events through.
 	HtlcNotifier htlcNotifier
+
+	// FailAliasUpdate is a function used to fail an HTLC for an
+	// option_scid_alias channel.
+	FailAliasUpdate func(sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate
 }
 
 // localUpdateAddMsg contains a locally initiated htlc and a channel that will
@@ -646,6 +651,33 @@ func shouldAdjustCommitFee(netFee, chanFee,
 	default:
 		return false
 	}
+}
+
+// createAliasFailure creates a ChannelUpdate when failing an incoming or
+// outgoing HTLC.
+func (l *channelLink) createAliasFailure(incoming bool,
+	outgoingScid lnwire.ShortChannelID,
+	cb func(update *lnwire.ChannelUpdate) lnwire.FailureMessage) lnwire.FailureMessage {
+
+	var failure lnwire.FailureMessage
+
+	// Try using the FailAliasUpdate function. If it returns nil, fallback
+	// to the non-alias behavior.
+	scid := outgoingScid
+	if incoming {
+		scid = l.ShortChanID()
+	}
+
+	update := l.cfg.FailAliasUpdate(scid, incoming)
+	if update == nil {
+		// Fallback to the non-alias behavior for sending
+		// ChannelUpdates.
+		failure = l.createFailureWithUpdate(cb)
+	} else {
+		failure = cb(update)
+	}
+
+	return failure
 }
 
 // createFailureWithUpdate retrieves this link's last channel update message and
@@ -2319,6 +2351,17 @@ func dustHelper(chantype channeldb.ChannelType, localDustLimit,
 	return isDust
 }
 
+// AttachFailAliasUpdate sets the link's FailAliasUpdate function.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) AttachFailAliasUpdate(closure func(
+	sid lnwire.ShortChannelID, incoming bool) *lnwire.ChannelUpdate) {
+
+	l.Lock()
+	l.cfg.FailAliasUpdate = closure
+	l.Unlock()
+}
+
 // AttachMailBox updates the current mailbox used by this link, and hooks up
 // the mailbox's message and packet outboxes to the link's upstream and
 // downstream chans, respectively.
@@ -2362,7 +2405,7 @@ func (l *channelLink) UpdateForwardingPolicy(newPolicy ForwardingPolicy) {
 func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 	incomingHtlcAmt, amtToForward lnwire.MilliSatoshi,
 	incomingTimeout, outgoingTimeout uint32,
-	heightNow uint32) *LinkError {
+	heightNow uint32, originalScid lnwire.ShortChannelID) *LinkError {
 
 	l.RLock()
 	policy := l.cfg.FwrdingPolicy
@@ -2371,6 +2414,7 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 	// First check whether the outgoing htlc satisfies the channel policy.
 	err := l.canSendHtlc(
 		policy, payHash, amtToForward, outgoingTimeout, heightNow,
+		originalScid,
 	)
 	if err != nil {
 		return err
@@ -2394,13 +2438,10 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 
 		// As part of the returned error, we'll send our latest routing
 		// policy so the sending node obtains the most up to date data.
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewFeeInsufficient(
-					amtToForward, *upd,
-				)
-			},
-		)
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewFeeInsufficient(amtToForward, *upd)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewLinkError(failure)
 	}
 
@@ -2416,13 +2457,12 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 
 		// Grab the latest routing policy so the sending node is up to
 		// date with our current policy.
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewIncorrectCltvExpiry(
-					incomingTimeout, *upd,
-				)
-			},
-		)
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewIncorrectCltvExpiry(
+				incomingTimeout, *upd,
+			)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewLinkError(failure)
 	}
 
@@ -2442,8 +2482,11 @@ func (l *channelLink) CheckHtlcTransit(payHash [32]byte,
 	policy := l.cfg.FwrdingPolicy
 	l.RUnlock()
 
+	// We pass in hop.Source here as this is only used in the Switch when
+	// trying to send over a local link. This causes the fallback mechanism
+	// to occur.
 	return l.canSendHtlc(
-		policy, payHash, amt, timeout, heightNow,
+		policy, payHash, amt, timeout, heightNow, hop.Source,
 	)
 }
 
@@ -2451,7 +2494,7 @@ func (l *channelLink) CheckHtlcTransit(payHash [32]byte,
 // the channel's amount and time lock constraints.
 func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 	payHash [32]byte, amt lnwire.MilliSatoshi, timeout uint32,
-	heightNow uint32) *LinkError {
+	heightNow uint32, originalScid lnwire.ShortChannelID) *LinkError {
 
 	// As our first sanity check, we'll ensure that the passed HTLC isn't
 	// too small for the next hop. If so, then we'll cancel the HTLC
@@ -2463,13 +2506,10 @@ func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 
 		// As part of the returned error, we'll send our latest routing
 		// policy so the sending node obtains the most up to date data.
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewAmountBelowMinimum(
-					amt, *upd,
-				)
-			},
-		)
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewAmountBelowMinimum(amt, *upd)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewLinkError(failure)
 	}
 
@@ -2481,11 +2521,10 @@ func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 
 		// As part of the returned error, we'll send our latest routing
 		// policy so the sending node obtains the most up-to-date data.
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewTemporaryChannelFailure(upd)
-			},
-		)
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewTemporaryChannelFailure(upd)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewDetailedLinkError(failure, OutgoingFailureHTLCExceedsMax)
 	}
 
@@ -2496,11 +2535,11 @@ func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 		l.log.Warnf("htlc(%x) has an expiry that's too soon: "+
 			"outgoing_expiry=%v, best_height=%v", payHash[:],
 			timeout, heightNow)
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewExpiryTooSoon(*upd)
-			},
-		)
+
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewExpiryTooSoon(*upd)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewLinkError(failure)
 	}
 
@@ -2517,11 +2556,10 @@ func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 	if amt > l.Bandwidth() {
 		l.log.Warnf("insufficient bandwidth to route htlc: %v is "+
 			"larger than %v", amt, l.Bandwidth())
-		failure := l.createFailureWithUpdate(
-			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-				return lnwire.NewTemporaryChannelFailure(upd)
-			},
-		)
+		cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+			return lnwire.NewTemporaryChannelFailure(upd)
+		}
+		failure := l.createAliasFailure(false, originalScid, cb)
 		return NewDetailedLinkError(
 			failure, OutgoingFailureInsufficientBalance,
 		)
@@ -2993,12 +3031,12 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				l.log.Errorf("unable to encode the "+
 					"remaining route %v", err)
 
-				failure := l.createFailureWithUpdate(
-					func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
-						return lnwire.NewTemporaryChannelFailure(
-							upd,
-						)
-					},
+				cb := func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
+					return lnwire.NewTemporaryChannelFailure(upd)
+				}
+
+				failure := l.createAliasFailure(
+					true, hop.Source, cb,
 				)
 
 				l.sendHTLCError(

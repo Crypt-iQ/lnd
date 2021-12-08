@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/connmgr"
@@ -651,6 +652,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		Clock:                  clock.NewDefaultClock(),
 		HTLCExpiry:             htlcswitch.DefaultHTLCExpiry,
 		DustThreshold:          thresholdMSats,
+		SignAliasUpdate:        s.signAliasUpdate,
 	}, uint32(currentHeight))
 	if err != nil {
 		return nil, err
@@ -1491,6 +1493,20 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	s.connMgr = cmgr
 
 	return s, nil
+}
+
+// signAliasUpdate takes a ChannelUpdate and returns the signature. This is
+// used for option_scid_alias channels where the ChannelUpdate to be sent back
+// may differ from what is on disk.
+func (s *server) signAliasUpdate(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
+	error) {
+
+	data, err := u.DataToSign()
+	if err != nil {
+		return nil, err
+	}
+
+	return s.cc.MsgSigner.SignMessage(s.identityKeyLoc, data, true)
 }
 
 // createLivenessMonitor creates a set of health checks using our configured

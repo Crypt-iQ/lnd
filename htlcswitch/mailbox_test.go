@@ -213,6 +213,11 @@ func newMailboxContext(t *testing.T, startTime time.Time,
 				ShortChannelID: sid,
 			}, nil
 		},
+		failAliasUpdate: func(sid lnwire.ShortChannelID,
+			incoming bool) *lnwire.ChannelUpdate {
+
+			return nil
+		},
 		forwardPackets: ctx.forward,
 		clock:          ctx.clock,
 		expiry:         expiry,

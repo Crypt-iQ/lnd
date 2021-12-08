@@ -73,6 +73,16 @@ type dustHandler interface {
 	getDustClosure() dustClosure
 }
 
+// scidAliasHandler is an interface that the ChannelLink implements so it can
+// properly handle option_scid_alias channels.
+type scidAliasHandler interface {
+	// AttachFailAliasUpdate allows the link to properly fail incoming
+	// HTLCs on option_scid_alias channels.
+	AttachFailAliasUpdate(failClosure func(
+		sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate)
+}
+
 // ChannelUpdateHandler is an interface that provides methods that allow
 // sending lnwire.Message to the underlying link as well as querying state.
 type ChannelUpdateHandler interface {
@@ -142,6 +152,9 @@ type ChannelLink interface {
 	// Embed the dustHandler interface.
 	dustHandler
 
+	// Embed the scidAliasHandler interface.
+	scidAliasHandler
+
 	// IsPrivate returns true if the underlying channel is private.
 	IsPrivate() bool
 
@@ -178,7 +191,7 @@ type ChannelLink interface {
 	CheckHtlcForward(payHash [32]byte, incomingAmt lnwire.MilliSatoshi,
 		amtToForward lnwire.MilliSatoshi,
 		incomingTimeout, outgoingTimeout uint32,
-		heightNow uint32) *LinkError
+		heightNow uint32, scid lnwire.ShortChannelID) *LinkError
 
 	// CheckHtlcTransit should return a nil error if the passed HTLC details
 	// satisfy the current channel policy.  Otherwise, a LinkError with a

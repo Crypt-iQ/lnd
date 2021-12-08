@@ -107,6 +107,11 @@ type mailBoxConfig struct {
 	// have not been yet been delivered. The computed deadline will expiry
 	// this long after the Adds are added via AddPacket.
 	expiry time.Duration
+
+	// failAliasUpdate is a function used to fail an HTLC for an
+	// option-scid-alias channel.
+	failAliasUpdate func(sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate
 }
 
 // memoryMailBox is an implementation of the MailBox struct backed by purely
@@ -711,9 +716,20 @@ func (m *memoryMailBox) FailAdd(pkt *htlcPacket) {
 	// peer if this is a forward, or report to the user if the failed
 	// payment was locally initiated.
 	var failure lnwire.FailureMessage
-	update, err := m.cfg.fetchUpdate(m.cfg.shortChanID)
-	if err != nil {
-		failure = &lnwire.FailTemporaryNodeFailure{}
+
+	// Try to use the failAliasUpdate function in case this is an
+	// option-scid-alias channel. If it's not, we'll fallback to the
+	// original non-alias behavior.
+	update := m.cfg.failAliasUpdate(pkt.originalOutgoingChanID, false)
+	if update == nil {
+		// Execute the fallback behavior.
+		var err error
+		update, err = m.cfg.fetchUpdate(m.cfg.shortChanID)
+		if err != nil {
+			failure = &lnwire.FailTemporaryNodeFailure{}
+		} else {
+			failure = lnwire.NewTemporaryChannelFailure(update)
+		}
 	} else {
 		failure = lnwire.NewTemporaryChannelFailure(update)
 	}
@@ -828,6 +844,12 @@ type mailOrchConfig struct {
 	// have not been yet been delivered. The computed deadline will expiry
 	// this long after the Adds are added to a mailbox via AddPacket.
 	expiry time.Duration
+
+	// failAliasUpdate is a function used to fail an HTLC for an
+	// option-scid-alias channel. This is passed to the individual memory
+	// mailboxes.
+	failAliasUpdate func(sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate
 }
 
 // newMailOrchestrator initializes a fresh mailOrchestrator.
@@ -881,11 +903,12 @@ func (mo *mailOrchestrator) exclusiveGetOrCreateMailBox(
 	mailbox, ok := mo.mailboxes[chanID]
 	if !ok {
 		mailbox = newMemoryMailBox(&mailBoxConfig{
-			shortChanID:    shortChanID,
-			fetchUpdate:    mo.cfg.fetchUpdate,
-			forwardPackets: mo.cfg.forwardPackets,
-			clock:          mo.cfg.clock,
-			expiry:         mo.cfg.expiry,
+			shortChanID:     shortChanID,
+			fetchUpdate:     mo.cfg.fetchUpdate,
+			forwardPackets:  mo.cfg.forwardPackets,
+			clock:           mo.cfg.clock,
+			expiry:          mo.cfg.expiry,
+			failAliasUpdate: mo.cfg.failAliasUpdate,
 		})
 		mailbox.Start()
 		mo.mailboxes[chanID] = mailbox

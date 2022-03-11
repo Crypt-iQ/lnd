@@ -6496,6 +6496,7 @@ func (lc *LightningChannel) CompleteCooperativeClose(
 	}
 
 	// Get the final balances after subtracting the proposed fee.
+	// TODO: balances may be different depending on dust?
 	ourBalance, theirBalance, err := CoopCloseBalance(
 		lc.channelState.ChanType, lc.channelState.IsInitiator,
 		proposedFee, lc.channelState.LocalCommitment,

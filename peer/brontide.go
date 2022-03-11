@@ -426,6 +426,10 @@ type Brontide struct {
 	// a particular channel are sent over.
 	localCloseChanReqs chan *htlcswitch.ChanClose
 
+	// coopCloseReady is a channel that is used by a link to notify the
+	// Brontide that the ClosingSigned phase can begin.
+	coopCloseReady chan *wire.OutPoint
+
 	// linkFailures receives all reported channel failures from the switch,
 	// and instructs the channelManager to clean remaining channel state.
 	linkFailures chan linkFailureReport
@@ -467,6 +471,7 @@ func NewBrontide(cfg Config) *Brontide {
 		activeMsgStreams:   make(map[lnwire.ChannelID]*msgStream),
 		activeChanCloses:   make(map[lnwire.ChannelID]*chancloser.ChanCloser),
 		localCloseChanReqs: make(chan *htlcswitch.ChanClose),
+		coopCloseReady:     make(chan *wire.OutPoint),
 		linkFailures:       make(chan linkFailureReport),
 		chanCloseMsgs:      make(chan *closeMsg),
 		resentChanSyncMsg:  make(map[lnwire.ChannelID]struct{}),
@@ -831,6 +836,11 @@ func (p *Brontide) addLink(chanPoint *wire.OutPoint,
 		towerClient = p.cfg.TowerClient
 	}
 
+	deliveryAddr, err := p.genDeliveryScript()
+	if err != nil {
+		return err
+	}
+
 	linkCfg := htlcswitch.ChannelLinkConfig{
 		Peer:                    p,
 		DecodeHopIterators:      p.cfg.Sphinx.DecodeHopIterators,
@@ -865,6 +875,9 @@ func (p *Brontide) addLink(chanPoint *wire.OutPoint,
 		NotifyActiveChannel:     p.cfg.ChannelNotifier.NotifyActiveChannelEvent,
 		NotifyInactiveChannel:   p.cfg.ChannelNotifier.NotifyInactiveChannelEvent,
 		HtlcNotifier:            p.cfg.HtlcNotifier,
+		DeliveryAddr:            deliveryAddr,
+		NotifyShutdownSent:      p.HandleLocalCloseChanReqs,
+		NotifyCoopReady:         p.HandleCoopReady,
 	}
 
 	// Before adding our new link, purge the switch of any pending or live
@@ -1419,6 +1432,17 @@ out:
 			case <-p.quit:
 				break out
 			}
+
+			// Send the Shutdown to the link. If ProcessCloseMsg
+			// later fails validating the Shutdown and this message
+			// is sent to the link, the coop close process won't
+			// happen but the link will be unaware. This is fine
+			// as the link should eventually send a shutdown and
+			// stop when the channel has no htlc's or updates. It
+			// will notify us that coop close is ready, and
+			// gracefully exit.
+			isLinkUpdate = p.isActiveChannel(msg.ChannelID)
+
 		case *lnwire.ClosingSigned:
 			select {
 			case p.chanCloseMsgs <- &closeMsg{msg.ChannelID, msg}:
@@ -2317,6 +2341,11 @@ out:
 		case req := <-p.localCloseChanReqs:
 			p.handleLocalCloseReq(req)
 
+		// We've just been notified that the channel identified by
+		// chanPoint is ready to begin the next phase of coop close.
+		case chanPoint := <-p.coopCloseReady:
+			p.beginClosingSigned(chanPoint)
+
 		// We've received a link failure from a link that was added to
 		// the switch. This will initiate the teardown of the link, and
 		// initiate any on-chain closures if necessary.
@@ -2441,13 +2470,6 @@ func (p *Brontide) fetchActiveChanCloser(chanID lnwire.ChannelID) (
 	// cooperative channel closure.
 	chanCloser, ok := p.activeChanCloses[chanID]
 	if !ok {
-		// Optimistically try a link shutdown, erroring out if it
-		// failed.
-		if err := p.tryLinkShutdown(chanID); err != nil {
-			peerLog.Errorf("failed link shutdown: %v", err)
-			return nil, err
-		}
-
 		// We'll create a valid closing state machine in order to
 		// respond to the initiated cooperative channel closure. First,
 		// we set the delivery script that our funds will be paid out
@@ -2507,37 +2529,6 @@ func (p *Brontide) fetchActiveChanCloser(chanID lnwire.ChannelID) (
 	return chanCloser, nil
 }
 
-// chooseDeliveryScript takes two optionally set shutdown scripts and returns
-// a suitable script to close out to. This may be nil if neither script is
-// set. If both scripts are set, this function will error if they do not match.
-func chooseDeliveryScript(upfront,
-	requested lnwire.DeliveryAddress) (lnwire.DeliveryAddress, error) {
-
-	// If no upfront shutdown script was provided, return the user
-	// requested address (which may be nil).
-	if len(upfront) == 0 {
-		return requested, nil
-	}
-
-	// If an upfront shutdown script was provided, and the user did not request
-	// a custom shutdown script, return the upfront address.
-	if len(requested) == 0 {
-		return upfront, nil
-	}
-
-	// If both an upfront shutdown script and a custom close script were
-	// provided, error if the user provided shutdown script does not match
-	// the upfront shutdown script (because closing out to a different script
-	// would violate upfront shutdown).
-	if !bytes.Equal(upfront, requested) {
-		return nil, chancloser.ErrUpfrontShutdownScriptMismatch
-	}
-
-	// The user requested script matches the upfront shutdown script, so we
-	// can return it without error.
-	return upfront, nil
-}
-
 // handleLocalCloseReq kicks-off the workflow to execute a cooperative or
 // forced unilateral closure of the channel initiated by a local subsystem.
 func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
@@ -2563,34 +2554,6 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 	// out this channel on-chain, so we execute the cooperative channel
 	// closure workflow.
 	case contractcourt.CloseRegular:
-		// First, we'll choose a delivery address that we'll use to send the
-		// funds to in the case of a successful negotiation.
-
-		// An upfront shutdown and user provided script are both optional,
-		// but must be equal if both set  (because we cannot serve a request
-		// to close out to a script which violates upfront shutdown). Get the
-		// appropriate address to close out to (which may be nil if neither
-		// are set) and error if they are both set and do not match.
-		deliveryScript, err := chooseDeliveryScript(
-			channel.LocalUpfrontShutdownScript(), req.DeliveryScript,
-		)
-		if err != nil {
-			peerLog.Errorf("cannot close channel %v: %v", req.ChanPoint, err)
-			req.Err <- err
-			return
-		}
-
-		// If neither an upfront address or a user set address was
-		// provided, generate a fresh script.
-		if len(deliveryScript) == 0 {
-			deliveryScript, err = p.genDeliveryScript()
-			if err != nil {
-				peerLog.Errorf(err.Error())
-				req.Err <- err
-				return
-			}
-		}
-
 		// Next, we'll create a new channel closer state machine to
 		// handle the close negotiation.
 		_, startingHeight, err := p.cfg.ChainIO.GetBestBlock()
@@ -2600,50 +2563,60 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 			return
 		}
 
-		// Optimistically try a link shutdown, erroring out if it
-		// failed.
-		if err := p.tryLinkShutdown(chanID); err != nil {
-			peerLog.Errorf("failed link shutdown: %v", err)
-			req.Err <- err
-			return
-		}
-
-		chanCloser := chancloser.NewChanCloser(
-			chancloser.ChanCloseCfg{
+		chanCloser, ok := p.activeChanCloses[chanID]
+		if !ok {
+			// If the ChanCloser doesn't exist in activeChanCloses,
+			// we'll add this one to the map.
+			cfg := chancloser.ChanCloseCfg{
 				Channel:     channel,
 				BroadcastTx: p.cfg.Wallet.PublishTransaction,
-				DisableChannel: func(chanPoint wire.OutPoint) error {
-					return p.cfg.ChanStatusMgr.RequestDisable(chanPoint, false)
-				},
-				Disconnect: func() error {
-					return p.cfg.DisconnectPeer(p.IdentityKey())
-				},
-				Quit: p.quit,
-			},
-			deliveryScript,
-			req.TargetFeePerKw,
-			uint32(startingHeight),
-			req,
-			true,
-		)
-		p.activeChanCloses[chanID] = chanCloser
+				Quit:        p.quit,
+			}
+			cfg.DisableChannel = func(op wire.OutPoint) error {
+				return p.cfg.ChanStatusMgr.RequestDisable(
+					op, false,
+				)
+			}
+			cfg.Disconnect = func() error {
+				return p.cfg.DisconnectPeer(p.IdentityKey())
+			}
 
-		// Finally, we'll initiate the channel shutdown within the
-		// chanCloser, and send the shutdown message to the remote
-		// party to kick things off.
-		shutdownMsg, err := chanCloser.ShutdownChan()
-		if err != nil {
-			peerLog.Errorf(err.Error())
-			req.Err <- err
-			delete(p.activeChanCloses, chanID)
+			chanCloser = chancloser.NewChanCloser(
+				cfg,
+				req.DeliveryScript,
+				req.TargetFeePerKw,
+				uint32(startingHeight),
+				req,
+				true,
+			)
 
-			// As we were unable to shutdown the channel, we'll
-			// return it back to its normal state.
-			channel.ResetState()
-			return
+			p.activeChanCloses[chanID] = chanCloser
 		}
 
-		p.queueMsg(shutdownMsg, nil)
+		// Create the Shutdown message from the DeliveryScript and the
+		// ChannelID.
+		shutdownMsg := lnwire.NewShutdown(chanID, req.DeliveryScript)
+
+		// Next, we'll pass the Shutdown message to the ChanCloser
+		// state machine. There won't be any messages to process since
+		// ClosingSigned will only begin once the channel clean
+		// callback is called by the link.
+		_, _, err = chanCloser.ProcessCloseMsg(shutdownMsg)
+		if err != nil {
+			err := fmt.Errorf("unable to process close msg: %v",
+				err)
+			peerLog.Error(err)
+
+			// As the negotiations failed, we'll reset the channel
+			// state to ensure we act to on-chain events as normal.
+			chanCloser.Channel().ResetState()
+
+			if chanCloser.CloseRequest() != nil {
+				chanCloser.CloseRequest().Err <- err
+			}
+			delete(p.activeChanCloses, chanID)
+			return
+		}
 
 	// A type of CloseBreach indicates that the counterparty has breached
 	// the channel therefore we need to clean up our local state.
@@ -2652,6 +2625,51 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 		peerLog.Infof("ChannelPoint(%v) has been breached, wiping "+
 			"channel", req.ChanPoint)
 		p.WipeChannel(req.ChanPoint)
+	}
+}
+
+// beginClosingSigned begins the next phase of coop close for the channel
+// identified by chanPoint. This will stop the link, retrieve the associated
+// ChanCloser if it exists, and call ChannelClean, which will advance the
+// underlying coop close state.
+func (p *Brontide) beginClosingSigned(chanPoint *wire.OutPoint) {
+	// First, stop the link. It can't process updates at this point, but
+	// this completely stops it and removes it from the PoV of the switch.
+	chanID := lnwire.NewChanIDFromOutPoint(chanPoint)
+	p.cfg.Switch.RemoveLink(chanID)
+
+	// Next, we'll retrieve the ChanCloser for this particular outpoint. If
+	// it doesn't exist, we'll return early. This can happen if an error
+	// occurred while processing the peer's Shutdown, but it was still sent
+	// to the link.
+	chanCloser, ok := p.activeChanCloses[chanID]
+	if !ok {
+		peerLog.Errorf("chan closer for ChanID(%v) does not exist, "+
+			"stopping coop close", chanID)
+		return
+	}
+
+	// Now, we'll let the ChanCloser know that the ClosingSigned phase can
+	// start. If an error is returned here, we'll return. One way this can
+	// happen is if an error occured while processing the peer's Shutdown,
+	// but it was still sent to the link.
+	msgs, err := chanCloser.ChannelClean()
+	if err != nil {
+		peerLog.Errorf("channel clean call failed for ChanID(%v), "+
+			"stopping coop close", chanID)
+
+		if chanCloser.CloseRequest() != nil {
+			chanCloser.CloseRequest().Err <- err
+		}
+		delete(p.activeChanCloses, chanID)
+		return
+	}
+
+	// We'll send out the single ClosingSigned message. We're either
+	// sending the first ClosingSigned or responding to our peer's
+	// ClosingSigned if they've sent it already.
+	for _, msg := range msgs {
+		p.queueMsg(msg, nil)
 	}
 }
 
@@ -2736,35 +2754,6 @@ func (p *Brontide) handleLinkFailure(failure linkFailureReport) {
 				"remote peer: %v", err)
 		}
 	}
-}
-
-// tryLinkShutdown attempts to fetch a target link from the switch, calls
-// ShutdownIfChannelClean to optimistically trigger a link shutdown, and
-// removes the link from the switch. It returns an error if any step failed.
-func (p *Brontide) tryLinkShutdown(cid lnwire.ChannelID) error {
-	// Fetch the appropriate link and call ShutdownIfChannelClean to ensure
-	// no other updates can occur.
-	chanLink := p.fetchLinkFromKeyAndCid(cid)
-
-	// If the link happens to be nil, return ErrChannelNotFound so we can
-	// ignore the close message.
-	if chanLink == nil {
-		return ErrChannelNotFound
-	}
-
-	// Else, the link exists, so attempt to trigger shutdown. If this
-	// fails, we'll send an error message to the remote peer.
-	if err := chanLink.ShutdownIfChannelClean(); err != nil {
-		return err
-	}
-
-	// Next, we remove the link from the switch to shut down all of the
-	// link's goroutines and remove it from the switch's internal maps. We
-	// don't call WipeChannel as the channel must still be in the
-	// activeChannels map to process coop close messages.
-	p.cfg.Switch.RemoveLink(cid)
-
-	return nil
 }
 
 // fetchLinkFromKeyAndCid fetches a link from the switch via the remote's
@@ -3230,6 +3219,19 @@ func (p *Brontide) HandleLocalCloseChanReqs(req *htlcswitch.ChanClose) {
 	case <-p.quit:
 		peerLog.Infof("Unable to deliver local close channel request "+
 			"to peer %x", p.PubKey())
+	}
+}
+
+// HandleCoopReady is called by a link to let this subsystem know that the
+// channel is ready to be cooperatively closed. We'll also stop the link.
+func (p *Brontide) HandleCoopReady(chanPoint *wire.OutPoint) {
+	select {
+	case p.coopCloseReady <- chanPoint:
+		peerLog.Infof("channel %v is ready to begin next phase of "+
+			"coop close", chanPoint)
+	case <-p.quit:
+		peerLog.Infof("unable to begin next phase of coop close for "+
+			"channel %v", chanPoint)
 	}
 }
 

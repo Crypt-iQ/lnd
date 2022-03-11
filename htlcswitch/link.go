@@ -62,6 +62,14 @@ const (
 	DefaultMaxLinkFeeAllocation float64 = 0.5
 )
 
+var (
+	// ErrUpfrontShutdownScriptMismatch is returned when a peer or end user
+	// provides a cooperative close script which does not match the upfront
+	// shutdown script previously set for that party.
+	ErrUpfrontShutdownScriptMismatch = fmt.Errorf("shutdown script does " +
+		"not match upfront shutdown script")
+)
+
 // ForwardingPolicy describes the set of constraints that a given ChannelLink
 // is to adhere to when forwarding HTLC's. For each incoming HTLC, this set of
 // constraints will be consulted in order to ensure that adequate fees are
@@ -294,6 +302,21 @@ type ChannelLinkConfig struct {
 	// HtlcNotifier is an instance of a htlcNotifier which we will pipe htlc
 	// events through.
 	HtlcNotifier htlcNotifier
+
+	// DeliveryAddr is the address to use in Shutdown if an upfront
+	// shutdown script hasn't been set.
+	DeliveryAddr lnwire.DeliveryAddress
+
+	// NotifyShutdownSent is used to notify the peer.Brontide for this link
+	// that the Shutdown message has been sent. This will update the coop
+	// close state machine.
+	NotifyShutdownSent func(req *ChanClose)
+
+	// NotifyCoopReady is used to notify the peer.Brontide that the channel
+	// has no pending updates or htlc's and that the next phase of coop
+	// close can begin. The link will also begin shutting down after this
+	// callback is called.
+	NotifyCoopReady func(chanPoint *wire.OutPoint)
 }
 
 // localUpdateAddMsg contains a locally initiated htlc and a channel that will
@@ -306,9 +329,11 @@ type localUpdateAddMsg struct {
 
 // shutdownReq contains an error channel that will be used by the channelLink
 // to send an error if shutdown failed. If shutdown succeeded, the channel will
-// be closed.
+// be closed. The local boolean is true if we initiated the shutdown and false
+// if the remote did.
 type shutdownReq struct {
-	err chan error
+	local bool
+	err   chan error
 }
 
 // channelLink is the service which drives a channel's commitment update
@@ -376,8 +401,24 @@ type channelLink struct {
 	localUpdateAdd chan *localUpdateAddMsg
 
 	// shutdownRequest is a channel that the channelLink will listen on to
-	// service shutdown requests from ShutdownIfChannelClean calls.
-	shutdownRequest chan *shutdownReq
+	// service shutdown requests from CoopShutdown calls.
+	shutdownRequest chan *ChanClose
+
+	// localCloseReq stores the local ChanClose request to pass to the
+	// peer.Brontide when we're done with the Shutdown phase.
+	localCloseReq *ChanClose
+
+	// shutdownInit is a bool that is set when we've initiated a coop
+	// close.
+	shutdownInit bool
+
+	// shutdownReceived is a bool that is set when we've received a
+	// Shutdown message from the remote peer.
+	shutdownReceived bool
+
+	// shutdownSent is a bool signalling that we've sent a Shutdown message
+	// to the peer.
+	shutdownSent bool
 
 	// updateFeeTimer is the timer responsible for updating the link's
 	// commitment fee every time it fires.
@@ -423,7 +464,7 @@ func NewChannelLink(cfg ChannelLinkConfig,
 		cfg:             cfg,
 		channel:         channel,
 		shortChanID:     channel.ShortChanID(),
-		shutdownRequest: make(chan *shutdownReq),
+		shutdownRequest: make(chan *ChanClose),
 		hodlMap:         make(map[channeldb.CircuitKey]hodlHtlc),
 		hodlQueue:       queue.NewConcurrentQueue(10),
 		log:             build.NewPrefixLog(logPrefix, log),
@@ -1088,6 +1129,80 @@ func (l *channelLink) htlcManager() {
 			l.cfg.BatchTicker.Pause()
 		}
 
+		// If we are attempting to shutdown the link to cooperatively
+		// close and the channel is clear of our pending updates and we
+		// haven't already sent a Shutdown, we'll send one now.
+		if (l.shutdownInit || l.shutdownReceived) && !l.shutdownSent &&
+			l.channel.PendingLocalUpdateCount() == 0 {
+
+			// Create the Shutdown we'll send over. Send the local
+			// upfront shutdown script if it exists, and the
+			// provided delivery address otherwise. This is used in
+			// case we did not initiate the coop close.
+			upfrontAddr := l.channel.LocalUpfrontShutdownScript()
+			if len(upfrontAddr) != 0 {
+				l.cfg.DeliveryAddr = upfrontAddr
+			}
+
+			shutdownMsg := lnwire.NewShutdown(
+				l.ChanID(), l.cfg.DeliveryAddr,
+			)
+
+			err := l.cfg.Peer.SendMessage(
+				false, shutdownMsg,
+			)
+			if err != nil {
+				l.log.Errorf("failed sending shutdown"+
+					"to peer: %v", err)
+			}
+
+			// Let peer.Brontide that we've sent the
+			// Shutdown message so that the coop close
+			// state machine can advance.
+			closeReq := l.localCloseReq
+			if closeReq == nil {
+				// If we are not the initiator of the
+				// coop close, we'll create a ChanClose
+				// struct, but omit some fields as they
+				// won't be used. We won't listen on
+				// the error channel either. If there's
+				// an error, we'll eventually shutdown
+				// the link anyways.
+				closeType := contractcourt.CloseRegular
+				chanPoint := l.ChannelPoint()
+				deliveryAddr := l.cfg.DeliveryAddr
+				errChan := make(chan error, 1)
+
+				closeReq = &ChanClose{
+					CloseType:      closeType,
+					ChanPoint:      chanPoint,
+					DeliveryScript: deliveryAddr,
+					Err:            errChan,
+				}
+			}
+
+			l.cfg.NotifyShutdownSent(closeReq)
+
+			l.shutdownSent = true
+		}
+
+		// If we've sent and received Shutdown and the channel is
+		// clean, then we'll notify peer.Brontide that the channel can
+		// be coop closed and stop the link.
+		//
+		// TODO: IsChannelClean may not be the correct path:
+		// - https://github.com/lightning/bolts/issues/964#issuecomment-1065418057
+		if l.shutdownSent && l.shutdownReceived &&
+			l.channel.IsChannelClean() {
+
+			l.cfg.NotifyCoopReady(l.ChannelPoint())
+
+			// The peer.Brontide for this link will call RemoveLink
+			// which will stop the link. Returning here ensures no
+			// more channel updates can occur.
+			return
+		}
+
 		select {
 		// Our update fee timer has fired, so we'll check the network
 		// fee to see if we should adjust our commitment fee.
@@ -1097,6 +1212,14 @@ func (l *channelLink) htlcManager() {
 			// If we're not the initiator of the channel, don't we
 			// don't control the fees, so we can ignore this.
 			if !l.channel.IsInitiator() {
+				continue
+			}
+
+			// If we've sent shutdown, stop sending fee updates. We
+			// still send fee updates while we intend to wind down
+			// but haven't sent Shutdown yet, since we may still
+			// want to update the fee.
+			if l.shutdownSent {
 				continue
 			}
 
@@ -1199,18 +1322,14 @@ func (l *channelLink) htlcManager() {
 			}
 
 		case req := <-l.shutdownRequest:
-			// If the channel is clean, we send nil on the err chan
-			// and return to prevent the htlcManager goroutine from
-			// processing any more updates. The full link shutdown
-			// will be triggered by RemoveLink in the peer.
-			if l.channel.IsChannelClean() {
-				req.err <- nil
-				return
-			}
-
-			// Otherwise, the channel has lingering updates, send
-			// an error and continue.
-			req.err <- ErrLinkFailedShutdown
+			// If this is a local shutdown request, then we should
+			// set a bit and wait until there are no more updates
+			// to send. We should not forward HTLC's to our peer or
+			// send update_fee. Only cancels are allowed. The
+			// peer.Brontide should be notified when we are in a
+			// ready state.
+			l.shutdownInit = true
+			l.localCloseReq = req
 
 		case <-l.quit:
 			return
@@ -1350,6 +1469,18 @@ func (l *channelLink) handleDownstreamUpdateAdd(pkt *htlcPacket) error {
 		l.log.Warnf(hodl.AddOutgoing.Warning())
 		l.mailBox.AckPacket(pkt.inKey())
 		return nil
+	}
+
+	// If the remote peer has sent a Shutdown or we have initiated the
+	// shutdown process (but may not have necessarily sent a Shutdown),
+	// we'll fail the Add as we're either waiting for a window to send a
+	// Shutdown message or have sent Shutdown and are attempting to clear
+	// the channel state completely.
+	if l.shutdownInit || l.shutdownReceived {
+		l.log.Debugf("Failing downstream add HTLC since we're in the " +
+			"shutdown phase of coop close")
+		l.mailBox.AckPacket(pkt.inKey())
+		return ErrLinkCoopClosing
 	}
 
 	// A new payment has been initiated via the downstream channel,
@@ -2000,6 +2131,27 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			"ChannelPoint(%v): received error from peer: %v",
 			l.channel.ChannelPoint(), msg.Error(),
 		)
+
+	case *lnwire.Shutdown:
+		// We've received a Shutdown message from the remote peer.
+		// We'll set the shutdownReceived bit and will cancel back any
+		// new HTLC's received after this point instead of forwarding
+		// or resolving them.
+		if l.shutdownReceived {
+			// Fail the link if a duplicate shutdown is received.
+			// This is also checked in peer.Brontide, but done here
+			// to properly stop the link.
+			l.fail(
+				LinkFailureError{code: ErrRemoteError},
+				"ChannelPoint(%v): received dupe shutdown "+
+					"peer", l.channel.ChannelPoint(),
+			)
+			return
+		}
+
+		// Otherwise, we'll set the shutdownReceived bool.
+		l.shutdownReceived = true
+
 	default:
 		l.log.Warnf("received unknown message of type %T", msg)
 	}
@@ -2586,27 +2738,61 @@ func (l *channelLink) HandleChannelUpdate(message lnwire.Message) {
 	l.mailBox.AddMessage(message)
 }
 
-// ShutdownIfChannelClean triggers a link shutdown if the channel is in a clean
-// state and errors if the channel has lingering updates.
+// CoopShutdown notifies the link that we want to initiate a cooperative close.
 //
 // NOTE: Part of the ChannelUpdateHandler interface.
-func (l *channelLink) ShutdownIfChannelClean() error {
-	errChan := make(chan error, 1)
-
-	select {
-	case l.shutdownRequest <- &shutdownReq{
-		err: errChan,
-	}:
-	case <-l.quit:
-		return ErrLinkShuttingDown
-	}
-
-	select {
-	case err := <-errChan:
+func (l *channelLink) CoopShutdown(req *ChanClose) error {
+	// Determine if upfront shutdown has been violated. If it hasn't we'll
+	// replace the DeliveryAddr with the address we'll actually use.
+	deliveryAddr, err := chooseDeliveryScript(
+		l.channel.LocalUpfrontShutdownScript(), req.DeliveryScript,
+	)
+	if err != nil {
 		return err
+	}
+
+	if len(deliveryAddr) != 0 {
+		l.cfg.DeliveryAddr = deliveryAddr
+	}
+
+	select {
+	case l.shutdownRequest <- req:
 	case <-l.quit:
 		return ErrLinkShuttingDown
 	}
+
+	return nil
+}
+
+// chooseDeliveryScript is a utility function to determine which delivery
+// script to use, or to error if a passed script does not match the upfront
+// shutdown script. Nil may be returned if both arguments are nil.
+func chooseDeliveryScript(upfront,
+	requested lnwire.DeliveryAddress) (lnwire.DeliveryAddress, error) {
+
+	// If no upfront shutdown script was provided, return the requested
+	// address (which may be nil).
+	if len(upfront) == 0 {
+		return requested, nil
+	}
+
+	// If the user did not request a custom shutdown script, return the
+	// upfront address.
+	if len(requested) == 0 {
+		return upfront, nil
+	}
+
+	// If both an upfront shutdown script and a custom close script were
+	// provided, error if the user provided shutdown script does not match
+	// the upfront shutdown script (because closing out to a different
+	// script would violate upfront shutdown).
+	if !bytes.Equal(upfront, requested) {
+		return nil, ErrUpfrontShutdownScriptMismatch
+	}
+
+	// The user requested shutdown script matches the upfront shutdown
+	// script, so we can return it without error.
+	return upfront, nil
 }
 
 // updateChannelFee updates the commitment fee-per-kw on this channel by

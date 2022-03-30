@@ -76,11 +76,35 @@ type dustHandler interface {
 // scidAliasHandler is an interface that the ChannelLink implements so it can
 // properly handle option_scid_alias channels.
 type scidAliasHandler interface {
-	// AttachFailAliasUpdate allows the link to properly fail incoming
+	// attachFailAliasUpdate allows the link to properly fail incoming
 	// HTLCs on option_scid_alias channels.
-	AttachFailAliasUpdate(failClosure func(
+	attachFailAliasUpdate(failClosure func(
 		sid lnwire.ShortChannelID,
 		incoming bool) *lnwire.ChannelUpdate)
+
+	// getAliases fetches the link's underlying aliases. This is used by
+	// the Switch to determine whether to forward an HTLC and where to
+	// forward an HTLC.
+	getAliases() []lnwire.ShortChannelID
+
+	// addAlias adds an alias to the underlying channel's set of aliases.
+	// This is called by the Switch to add an alias.
+	addAlias(alias lnwire.ShortChannelID) error
+
+	// isZeroConf returns whether or not the underlying channel is a
+	// zero-conf channel.
+	isZeroConf() bool
+
+	// isOptionScidAlias returns whether or not the underlying channel is a
+	// option-scid-alias channel.
+	isOptionScidAlias() bool
+
+	// confirmedScid returns the confirmed SCID for a zero-conf channel.
+	confirmedScid() lnwire.ShortChannelID
+
+	// zeroConfConfirmed returns whether or not the zero-conf channel has
+	// confirmed.
+	zeroConfConfirmed() bool
 }
 
 // ChannelUpdateHandler is an interface that provides methods that allow
@@ -165,12 +189,6 @@ type ChannelLink interface {
 	// short channel ID encodes the exact location in the main chain that
 	// the original funding output can be found.
 	ShortChanID() lnwire.ShortChannelID
-
-	// OtherShortChanID returns an alternative ShortChannelID for the
-	// channel. For option_scid_alias zero-conf channels, this will be the
-	// confirmed ShortChannelID. For regular option_scid_alias channels,
-	// this will be the alias.
-	OtherShortChanID() lnwire.ShortChannelID
 
 	// UpdateShortChanID updates the short channel ID for a link. This may
 	// be required in the event that a link is created before the short

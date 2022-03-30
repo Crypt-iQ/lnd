@@ -155,6 +155,37 @@ const (
 	// TODO: Decide on actual feature bit value.
 	ExplicitChannelTypeOptional = 45
 
+	// ScidAliasRequired is a required feature bit that signals that the
+	// node requires understanding of ShortChannelID aliases in the TLV
+	// segment of the funding_locked message.
+	//
+	// TODO: Change comment
+	// TODO: Decide on actual feature bit value.
+	ScidAliasRequired FeatureBit = 46
+
+	// ScidAliasOptional is an optional feature bit that signals that the
+	// node understands ShortChannelID aliases in the TLV segment of the
+	// funding_locked message.
+	//
+	// TODO: Change comment
+	// TODO: Decide on actual feature bit value.
+	ScidAliasOptional FeatureBit = 47
+
+	// ZeroConfRequired is a required channel_type feature bit that signals
+	// that the node wants to open a zero-conf channel.
+	//
+	// TODO: Change comment
+	// TODO: Decide on actual feature bit value.
+	ZeroConfRequired FeatureBit = 50
+
+	// ZeroConfOptional is an optional channel_type feature bit that
+	// signals that the node wants to open a zero-conf channel. Currently
+	// this is unused.
+	//
+	// TODO: Change comment
+	// TODO: Decide on actual feature bit value.
+	ZeroConfOptional FeatureBit = 51
+
 	// ScriptEnforcedLeaseOptional is an optional feature bit that signals
 	// that the node requires channels having zero-fee second-level HTLC
 	// transactions, which also imply anchor commitments, along with an
@@ -173,33 +204,6 @@ const (
 	// TODO: Decide on actual feature bit value.
 	ScriptEnforcedLeaseOptional FeatureBit = 2023
 
-	// ScidAliasRequired is a required feature bit that signals that the
-	// node requires understanding of ShortChannelID aliases in the TLV
-	// segment of the funding_locked message.
-	//
-	// TODO: Decide on actual feature bit value.
-	ScidAliasRequired FeatureBit = 4040
-
-	// ScidAliasOptional is an optional feature bit that signals that the
-	// node understands ShortChannelID aliases in the TLV segment of the
-	// funding_locked message.
-	//
-	// TODO: Decide on actual feature bit value.
-	ScidAliasOptional FeatureBit = 4041
-
-	// ZeroConfRequired is a required channel_type feature bit that signals
-	// that the node wants to open a zero-conf channel.
-	//
-	// TODO: Decide on actual feature bit value.
-	ZeroConfRequired FeatureBit = 4042
-
-	// ZeroConfOptional is an optional channel_type feature bit that
-	// signals that the node wants to open a zero-conf channel. Currently
-	// this is unused.
-	//
-	// TODO: Decide on actual feature bit value.
-	ZeroConfOptional FeatureBit = 4043
-
 	// maxAllowedSize is a maximum allowed size of feature vector.
 	//
 	// NOTE: Within the protocol, the maximum allowed message size is 65535
@@ -211,6 +215,14 @@ const (
 	// of the calculation, that leads us to 32764 bytes for each feature
 	// vector, or 131056 different features.
 	maxAllowedSize = 32764
+)
+
+const (
+	// ScidAliasChanType ...
+	ScidAliasChanType = 46
+
+	// ZeroConfChanType ...
+	ZeroConfChanType = 48
 )
 
 // IsRequired returns true if the feature bit is even, and false otherwise.
@@ -251,6 +263,8 @@ var Features = map[FeatureBit]string{
 	ScriptEnforcedLeaseOptional:   "script-enforced-lease",
 	ScidAliasRequired:             "scid-alias",
 	ScidAliasOptional:             "scid-alias",
+	ZeroConfRequired:              "zero-conf",
+	ZeroConfOptional:              "zero-conf",
 }
 
 // RawFeatureVector represents a set of feature bits as defined in BOLT-09.  A

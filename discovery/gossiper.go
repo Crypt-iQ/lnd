@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -72,6 +73,7 @@ var (
 type optionalMsgFields struct {
 	capacity     *btcutil.Amount
 	channelPoint *wire.OutPoint
+	remoteAlias  *lnwire.ShortChannelID
 }
 
 // apply applies the optional fields within the functional options.
@@ -99,6 +101,18 @@ func ChannelCapacity(capacity btcutil.Amount) OptionalMsgField {
 func ChannelPoint(op wire.OutPoint) OptionalMsgField {
 	return func(f *optionalMsgFields) {
 		f.channelPoint = &op
+	}
+}
+
+// RemoteAlias is an optional field that lets the gossiper know that a locally
+// sent channel update is actually an update for the peer that should replace
+// the ShortChannelID field with the remote's alias. This is only used for
+// channels with peers where the option-scid-alias feature bit was negotiated.
+// The channel update will be added to the graph under the original SCID, but
+// will be modified and re-signed with this alias.
+func RemoteAlias(alias lnwire.ShortChannelID) OptionalMsgField {
+	return func(f *optionalMsgFields) {
+		f.remoteAlias = &alias
 	}
 }
 
@@ -281,6 +295,11 @@ type Config struct {
 	// IsAlias returns true if a given ShortChannelID is an alias for
 	// option_scid_alias channels.
 	IsAlias func(scid lnwire.ShortChannelID) bool
+
+	// SignAliasUpdate is used to re-sign a channel update using the
+	// remote's alias if the option-scid-alias feature bit was negotiated.
+	SignAliasUpdate func(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
+		error)
 }
 
 // cachedNetworkMsg is a wrapper around a network message that can be used with
@@ -1830,7 +1849,8 @@ func (d *AuthenticatedGossiper) processZombieUpdate(
 	// With the signature valid, we'll proceed to mark the
 	// edge as live and wait for the channel announcement to
 	// come through again.
-	err = d.cfg.Router.MarkEdgeLive(msg.ShortChannelID)
+	baseScid := lnwire.NewShortChanIDFromInt(chanInfo.ChannelID)
+	err = d.cfg.Router.MarkEdgeLive(baseScid)
 	if err != nil {
 		return fmt.Errorf("unable to remove edge with "+
 			"chan_id=%v from zombie index: %v",
@@ -2397,6 +2417,10 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		return nil, false
 	}
 
+	// Even if this is one of our channel's with a peer and we've
+	// negotiated the option-scid-alias feature bit, it's ok to use the
+	// alias block height. This is because the aliases we use are all under
+	// the segwit block height and the isPremature check doesn't matter.
 	blockHeight := upd.ShortChannelID.BlockHeight
 	shortChanID := upd.ShortChannelID.ToUint64()
 
@@ -2418,6 +2442,8 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// whether this update is stale or is for a zombie channel in order to
 	// quickly reject it.
 	timestamp := time.Unix(int64(upd.Timestamp), 0)
+
+	// TODO4:
 	if d.cfg.Router.IsStaleEdgePolicy(
 		upd.ShortChannelID, timestamp, upd.ChannelFlags,
 	) {
@@ -2440,8 +2466,12 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// access the database. This ensures the state we read from the
 	// database has not changed between this point and when we call
 	// UpdateEdge() later.
+
+	// TODO5:
 	d.channelMtx.Lock(upd.ShortChannelID.ToUint64())
 	defer d.channelMtx.Unlock(upd.ShortChannelID.ToUint64())
+
+	// TODO6:
 	chanInfo, e1, e2, err := d.cfg.Router.GetChannelByID(
 		upd.ShortChannelID,
 	)
@@ -2480,6 +2510,11 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		// ChannelAnnouncement for since we reject them. Because of
 		// this, we temporarily add it to a map, and reprocess it after
 		// our own ChannelAnnouncement has been processed.
+		//
+		// The shortChanID may be an alias, but it is fine to use here
+		// since we don't have an edge in the graph and if the peer is
+		// not buggy, we should be able to use it once the gossiper
+		// receives the local announcement.
 		earlyMsgs, err := d.prematureChannelUpdates.Get(shortChanID)
 		switch {
 		// Nothing in the cache yet, we can just directly insert this
@@ -2577,8 +2612,16 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 			// maximum burst of 10. If we haven't seen an update
 			// for this channel before, we'll need to initialize a
 			// rate limiter for each direction.
+			//
+			// Since the edge exists in the graph, we'll create a
+			// rate limiter for chanInfo.ChannelID rather then the
+			// SCID the peer sent. This is because there may be
+			// multiple aliases for a channel and we may otherwise
+			// rate-limit only a single alias of the channel,
+			// instead of the whole channel.
+			baseScid := chanInfo.ChannelID
 			d.Lock()
-			rls, ok := d.chanUpdateRateLimiter[shortChanID]
+			rls, ok := d.chanUpdateRateLimiter[baseScid]
 			if !ok {
 				r := rate.Every(d.cfg.ChannelUpdateInterval)
 				b := d.cfg.MaxChannelUpdateBurst
@@ -2586,7 +2629,7 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 					rate.NewLimiter(r, b),
 					rate.NewLimiter(r, b),
 				}
-				d.chanUpdateRateLimiter[shortChanID] = rls
+				d.chanUpdateRateLimiter[baseScid] = rls
 			}
 			d.Unlock()
 
@@ -2600,9 +2643,14 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		}
 	}
 
+	// We'll use chanInfo.ChannelID rather than the peer-supplied
+	// ShortChannelID in the ChannelUpdate to avoid the router having to
+	// lookup the stored SCID. If we're sending the update, we'll always
+	// use the SCID stored in the database rather than a potentially
+	// different alias.
 	update := &channeldb.ChannelEdgePolicy{
 		SigBytes:                  upd.Signature.ToSignatureBytes(),
-		ChannelID:                 shortChanID,
+		ChannelID:                 chanInfo.ChannelID,
 		LastUpdate:                timestamp,
 		MessageFlags:              upd.MessageFlags,
 		ChannelFlags:              upd.ChannelFlags,
@@ -2623,8 +2671,10 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 
 			log.Debug(err)
 		} else {
+			// Since we know the stored SCID in the graph, we'll
+			// cache that SCID.
 			key := newRejectCacheKey(
-				upd.ShortChannelID.ToUint64(),
+				chanInfo.ChannelID,
 				sourceToPub(nMsg.source),
 			)
 			_, _ = d.recentRejects.Put(key, &cachedReject{})
@@ -2640,12 +2690,36 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// is an update to a channel that is not (yet) supposed to be announced
 	// to the greater network. However, our channel counter party will need
 	// to be given the update, so we'll try sending the update directly to
-	// the remote peer. We don't send this for alias SCIDs since those
-	// should not be sent to the counter-party. The fundingmanager will
-	// handle sending an appropriate ChannelUpdate to the counter-party in
-	// that case.
-	if !nMsg.isRemote && chanInfo.AuthProof == nil &&
-		!d.cfg.IsAlias(upd.ShortChannelID) {
+	// the remote peer.
+	if !nMsg.isRemote && chanInfo.AuthProof == nil {
+		if nMsg.optionalMsgFields != nil {
+			remoteAlias := nMsg.optionalMsgFields.remoteAlias
+			if remoteAlias != nil {
+				// The remoteAlias field was specified, meaning
+				// that we should replace the SCID in the
+				// update with the remote's alias. We'll also
+				// need to re-sign the channel update. This is
+				// required for option-scid-alias feature-bit
+				// negotiated channels.
+				upd.ShortChannelID = *remoteAlias
+
+				sig, err := d.cfg.SignAliasUpdate(upd)
+				if err != nil {
+					log.Error(err)
+					nMsg.err <- err
+					return nil, false
+				}
+
+				lnSig, err := lnwire.NewSigFromSignature(sig)
+				if err != nil {
+					log.Error(err)
+					nMsg.err <- err
+					return nil, false
+				}
+
+				upd.Signature = lnSig
+			}
+		}
 
 		// Get our peer's public key.
 		remotePubKey := remotePubFromChanInfo(
@@ -2672,9 +2746,10 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// Channel update announcement was successfully processed and now it
 	// can be broadcast to the rest of the network. However, we'll only
 	// broadcast the channel update announcement if it has an attached
-	// authentication proof.
+	// authentication proof. We also won't broadcast the update if it
+	// contains an alias because the network would reject this.
 	var announcements []networkMsg
-	if chanInfo.AuthProof != nil {
+	if chanInfo.AuthProof != nil && !d.cfg.IsAlias(upd.ShortChannelID) {
 		announcements = append(announcements, networkMsg{
 			peer:   nMsg.peer,
 			source: nMsg.source,

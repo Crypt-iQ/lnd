@@ -638,7 +638,7 @@ func newHopHintInfo(c *channeldb.OpenChannel, isActive bool) *HopHintInfo {
 		ShortChannelID:      c.ShortChannelID.ToUint64(),
 		OtherShortChannelID: c.OtherShortChanID().ToUint64(),
 		IsOptionScidAlias:   c.IsOptionScidAlias(),
-		ZeroConf:            c.ChanType.IsZeroConf(),
+		ZeroConf:            c.IsZeroConf(),
 	}
 }
 

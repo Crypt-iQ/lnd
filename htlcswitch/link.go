@@ -600,6 +600,7 @@ func (l *channelLink) markReestablished() {
 }
 
 // IsPrivate returns true if the underlying channel is private.
+// - make private
 func (l *channelLink) IsPrivate() bool {
 	state := l.channel.State()
 	return state.ChannelFlags&lnwire.FFAnnounceChannel == 0
@@ -751,18 +752,22 @@ func (l *channelLink) syncChanStates() error {
 
 			// For option-scid-alias or zero-conf channels, ensure
 			// that we send over the alias in the funding_locked
-			// message.
-			scid := l.ShortChanID()
-			otherScid := l.OtherShortChanID()
-			if IsAlias(scid) {
-				// If the ShortChannelID is an alias, then
-				// this is a zero-conf channel.
-				fundingLockedMsg.AliasScid = &scid
-			} else if otherScid != hop.Source {
-				// If the ShortChannelID is not an alias, and
-				// the OtherShortChanID is not the default,
-				// then this is an option-scid-alias channel.
-				fundingLockedMsg.AliasScid = &otherScid
+			// message. We'll send the first alias we find for the
+			// channel since it does not matter which alias we
+			// send. We'll error out if no aliases are found.
+			if l.isZeroConf() || l.isOptionScidAlias() {
+				aliases := l.getAliases()
+				if len(aliases) == 0 {
+					// This shouldn't happen since we
+					// always add at least one alias before
+					// the channel reaches the link.
+					return fmt.Errorf("no aliases found")
+				}
+
+				// getAliases returns a copy of the alias slice
+				// so it is ok to use a pointer to the first
+				// entry.
+				fundingLockedMsg.AliasScid = &aliases[0]
 			}
 
 			err = l.cfg.Peer.SendMessage(false, fundingLockedMsg)
@@ -2234,14 +2239,6 @@ func (l *channelLink) ShortChanID() lnwire.ShortChannelID {
 	return l.shortChanID
 }
 
-// OtherShortChanID returns the other SCID for the channel link. For
-// non-option_scid_alias channels, this is the default ShortChannelID.
-//
-// NOTE: Part of the ChannelLink interface.
-func (l *channelLink) OtherShortChanID() lnwire.ShortChannelID {
-	return l.channel.State().OtherShortChanID()
-}
-
 // UpdateShortChanID updates the short channel ID for a link. This may be
 // required in the event that a link is created before the short chan ID for it
 // is known, or a re-org occurs, and the funding transaction changes location
@@ -2351,10 +2348,56 @@ func dustHelper(chantype channeldb.ChannelType, localDustLimit,
 	return isDust
 }
 
-// AttachFailAliasUpdate sets the link's FailAliasUpdate function.
+// zeroConfConfirmed returns whether or not the zero-conf channel has
+// confirmed on-chain.
 //
 // Part of the scidAliasHandler interface.
-func (l *channelLink) AttachFailAliasUpdate(closure func(
+func (l *channelLink) zeroConfConfirmed() bool {
+	return l.channel.State().ZeroConfConfirmed()
+}
+
+// confirmedScid returns the confirmed SCID for a zero-conf channel. This
+// should not be called for non-zero-conf channels.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) confirmedScid() lnwire.ShortChannelID {
+	return l.channel.State().ZeroConfRealScid()
+}
+
+// isZeroConf returns whether or not the underlying channel is a zero-conf
+// channel.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) isZeroConf() bool {
+	return l.channel.State().IsZeroConf()
+}
+
+// isOptionScidAlias returns whether or not the underlying channel is a
+// option-scid-alias channel.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) isOptionScidAlias() bool {
+	return l.channel.State().IsOptionScidAlias()
+}
+
+// getAliases returns the set of aliases for this channel.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) getAliases() []lnwire.ShortChannelID {
+	return l.channel.State().GetAliases()
+}
+
+// addAlias adds an alias to the underlying channel's set of aliases.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) addAlias(alias lnwire.ShortChannelID) error {
+	return l.channel.State().AddAlias(alias)
+}
+
+// attachFailAliasUpdate sets the link's FailAliasUpdate function.
+//
+// Part of the scidAliasHandler interface.
+func (l *channelLink) attachFailAliasUpdate(closure func(
 	sid lnwire.ShortChannelID, incoming bool) *lnwire.ChannelUpdate) {
 
 	l.Lock()

@@ -134,6 +134,11 @@ var (
 	// was a revocation and false when it was a commitment signature. This is
 	// nil in the case of new channels with no updates exchanged.
 	lastWasRevokeKey = []byte("last-was-revoke")
+
+	// aliasKey can be accessed within the bucket for a channel (identified
+	// by its chanPoint). This key stores the set of alias SCIDs that the
+	// channel is using.
+	aliasKey = []byte("alias-key")
 )
 
 var (
@@ -200,9 +205,21 @@ const (
 	// from the database.
 	keyLocType tlv.Type = 1
 
-	// A tlv type definition used to serialize and deserialize an extra
-	// ShortChannelID for option_scid_alias channels.
-	scidType tlv.Type = 2
+	// A tlv type definition used to serialize and deserialize whether or
+	// not a channel is a zero-conf channel.
+	zeroConfType tlv.Type = 2
+
+	// A tlv type definition used to serialize and deserialize whether or
+	// not a channel negotiated the option_scid_alias channel type.
+	optionScidType tlv.Type = 3
+
+	// A tlv type definition used to serialize and deserialize whether or
+	// not a channel negotiated the option-scid-alias feature bit.
+	scidFeatureType tlv.Type = 4
+
+	// A tlv type definition used to serialize and deserialize the
+	// confirmed ShortChannelID for a zero-conf channel.
+	realScidType tlv.Type = 5
 )
 
 // indexStatus is an enum-like type that describes what state the
@@ -267,10 +284,6 @@ const (
 	// period of time, constraining every output that pays to the channel
 	// initiator with an additional CLTV of the lease maturity.
 	LeaseExpirationBit ChannelType = 1 << 6
-
-	// ZeroConfBit indicates that the channel is a zero-conf channel and
-	// may be used before confirmation.
-	ZeroConfBit ChannelType = 1 << 7
 )
 
 // IsSingleFunder returns true if the channel type if one of the known single
@@ -318,11 +331,6 @@ func (c ChannelType) IsFrozen() bool {
 // HasLeaseExpiration returns true if the channel originated from a lease.
 func (c ChannelType) HasLeaseExpiration() bool {
 	return c&LeaseExpirationBit == LeaseExpirationBit
-}
-
-// IsZeroConf returns true if the channel is a zero-conf channel.
-func (c ChannelType) IsZeroConf() bool {
-	return c&ZeroConfBit == ZeroConfBit
 }
 
 // ChannelConstraints represents a set of constraints meant to allow a node to
@@ -627,10 +635,8 @@ type OpenChannel struct {
 	// channel was initially confirmed. This includes: the block height,
 	// transaction index, and the output within the target transaction.
 	//
-	// If ChanType.IsZeroConf(), then this will be the ALIAS scid and the
-	// confirmed scid will be stored in OtherShortChannelID. The opposite
-	// will be true for regular option_scid_alias channels with the ALIAS
-	// scid being stored in OtherShortChannelID.
+	// If IsZeroConf(), then this will the "base" (very first) ALIAS scid
+	// and the confirmed SCID will be stored in ConfirmedScid.
 	ShortChannelID lnwire.ShortChannelID
 
 	// IsPending indicates whether a channel's funding transaction has been
@@ -757,10 +763,30 @@ type OpenChannel struct {
 	// have private key isolation from lnd.
 	RevocationKeyLocator keychain.KeyLocator
 
-	// OtherShortChannelID is another ShortChannelID that this channel may
-	// be referred to. This is only populated for option_scid_alias
-	// channels and will be the empty ShortChannelID otherwise.
-	OtherShortChannelID lnwire.ShortChannelID
+	// ZeroConf is a boolean that denotes whether the channel is a
+	// zero-conf channel.
+	ZeroConf bool
+
+	// OptionScidAlias is a boolean that denotes whether this channel has
+	// negotiated the option_scid_alias channel type and is not a zero-conf
+	// channel.
+	OptionScidAlias bool
+
+	// ScidAliasFeature is a boolean that denotes whether the
+	// option-scid-alias feature bit has been negotiated. This channel may
+	// not have negotiated the option-scid-alias or zero-conf channel
+	// types.
+	ScidAliasFeature bool
+
+	// confirmedScid is the confirmed ShortChannelID for a zero-conf
+	// channel. If the channel is unconfirmed, then this will be the
+	// default ShortChannelID. This is only set for zero-conf channels.
+	confirmedScid lnwire.ShortChannelID
+
+	// aliasScids is a list of aliases for this channel that we've given to
+	// the peer so they can issue invoices. This is only set for
+	// option_scid_alias and zero-conf channels.
+	aliasScids []lnwire.ShortChannelID
 
 	// TODO(roasbeef): eww
 	Db *ChannelStateDB
@@ -778,20 +804,97 @@ func (c *OpenChannel) ShortChanID() lnwire.ShortChannelID {
 	return c.ShortChannelID
 }
 
-// OtherShortChanID returns the current ShortChannelID of this channel.
-func (c *OpenChannel) OtherShortChanID() lnwire.ShortChannelID {
+// ZeroConfRealScid returns the zero-conf channel's confirmed scid. This should
+// only be called if IsZeroConf returns true.
+func (c *OpenChannel) ZeroConfRealScid() lnwire.ShortChannelID {
 	c.RLock()
 	defer c.RUnlock()
 
-	return c.OtherShortChannelID
+	return c.confirmedScid
 }
 
-// IsOptionScidAlias returns whether option_scid_alias was negotiated.
+// ZeroConfConfirmed returns whether the zero-conf channel has confirmed. This
+// should only be called if IsZeroConf returns true.
+func (c *OpenChannel) ZeroConfConfirmed() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.confirmedScid != hop.Source
+}
+
+// IsZeroConf returns whether the option_zeroconf channel type was negotiated.
+func (c *OpenChannel) IsZeroConf() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.ZeroConf
+}
+
+// IsOptionScidAlias returns whether the option_scid_alias channel type was
+// negotiated.
 func (c *OpenChannel) IsOptionScidAlias() bool {
 	c.RLock()
 	defer c.RUnlock()
 
-	return c.OtherShortChannelID != hop.Source
+	return c.OptionScidAlias
+}
+
+// NegotiatedAliasFeature returns whether the option-scid-alias feature bit was
+// negotiated.
+func (c *OpenChannel) NegotiatedAliasFeature() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.ScidAliasFeature
+}
+
+// AddAlias adds an alias to this channel's set and writes it to the database.
+func (c *OpenChannel) AddAlias(a lnwire.ShortChannelID) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if err := kvdb.Update(c.Db.backend, func(tx kvdb.RwTx) error {
+		chanBucket, err := fetchChanBucketRw(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel, err := fetchOpenChannel(
+			chanBucket, &c.FundingOutpoint,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel.aliasScids = append(channel.aliasScids, a)
+
+		return putOpenChannel(chanBucket, channel)
+	}, func() {}); err != nil {
+		return err
+	}
+
+	c.aliasScids = append(c.aliasScids, a)
+
+	return nil
+}
+
+// GetAliases returns the current set of aliases for this channel. This will
+// only return a populated slice if this is an option_scid_alias or zero-conf
+// channel.
+// TODO - may need database lookup depending on call-site.
+func (c *OpenChannel) GetAliases() []lnwire.ShortChannelID {
+	c.RLock()
+	defer c.RUnlock()
+
+	// Copy the AliasScids slice.
+	aliasCopy := make([]lnwire.ShortChannelID, 0, len(c.aliasScids))
+	for _, alias := range c.aliasScids {
+		aliasCopy = append(aliasCopy, alias)
+	}
+
+	return aliasCopy
 }
 
 // ChanStatus returns the current ChannelStatus of this channel.
@@ -1073,6 +1176,11 @@ func (c *OpenChannel) fullSync(tx kvdb.RwTx) error {
 		return err
 	}
 
+	// Since this is a new channel, aliasScids will not be initialized.
+	// We'll do so here. This is because aliasScids is private and
+	// OpenChannel does not have a constructor.
+	c.aliasScids = make([]lnwire.ShortChannelID, 0)
+
 	return putOpenChannel(chanBucket, c)
 }
 
@@ -1110,9 +1218,9 @@ func (c *OpenChannel) MarkAsOpen(openLoc lnwire.ShortChannelID) error {
 	return nil
 }
 
-// MarkOtherScid marks the confirmed OtherShortChannelID for zero-conf
-// channels.
-func (c *OpenChannel) MarkOtherScid(otherScid lnwire.ShortChannelID) error {
+// MarkRealScid marks the zero-conf channel's confirmed ShortChannelID. This
+// should only be done if IsZeroConf returns true.
+func (c *OpenChannel) MarkRealScid(realScid lnwire.ShortChannelID) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -1131,14 +1239,47 @@ func (c *OpenChannel) MarkOtherScid(otherScid lnwire.ShortChannelID) error {
 			return err
 		}
 
-		channel.OtherShortChannelID = otherScid
+		channel.confirmedScid = realScid
 
 		return putOpenChannel(chanBucket, channel)
 	}, func() {}); err != nil {
 		return err
 	}
 
-	c.OtherShortChannelID = otherScid
+	c.confirmedScid = realScid
+
+	return nil
+}
+
+// AddAliasScid adds an alias scid to the channel's append-only log of aliases.
+// This is currently only called for option_scid_alias and zero-conf channels.
+func (c *OpenChannel) AddAliasScid(alias lnwire.ShortChannelID) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if err := kvdb.Update(c.Db.backend, func(tx kvdb.RwTx) error {
+		chanBucket, err := fetchChanBucketRw(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel, err := fetchOpenChannel(
+			chanBucket, &c.FundingOutpoint,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel.aliasScids = append(channel.aliasScids, alias)
+
+		return putOpenChannel(chanBucket, channel)
+	}, func() {}); err != nil {
+		return err
+	}
+
+	c.aliasScids = append(c.aliasScids, alias)
 
 	return nil
 }
@@ -3249,17 +3390,16 @@ func (c *OpenChannel) AbsoluteThawHeight() (uint32, error) {
 		blockHeightBase := c.ShortChannelID.BlockHeight
 
 		// If this is a zero-conf channel, the ShortChannelID will be
-		// an alias. If it doesn't have OtherShortChannelID set, it's
-		// unconfirmed.
-		if c.ChanType.IsZeroConf() {
-			if !c.IsOptionScidAlias() {
+		// an alias.
+		if c.ZeroConf {
+			if !c.ZeroConfConfirmed() {
 				return 0, errors.New("cannot use relative " +
 					"height for unconfirmed zero-conf " +
 					"channel")
 			}
 
 			// Use the confirmed SCID's BlockHeight.
-			blockHeightBase = c.OtherShortChannelID.BlockHeight
+			blockHeightBase = c.confirmedScid.BlockHeight
 		}
 
 		return blockHeightBase + c.ThawHeight, nil
@@ -3480,12 +3620,39 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 		keyLocType, &channel.RevocationKeyLocator,
 	)
 
-	// Write the OtherShortChannelID as the second entry in a tlv stream.
-	otherScidRecord := MakeScidRecord(
-		scidType, &channel.OtherShortChannelID,
+	var zeroConfVal uint8
+	if channel.ZeroConf {
+		zeroConfVal = 1
+	}
+
+	zeroConfRecord := tlv.MakePrimitiveRecord(zeroConfType, zeroConfVal)
+
+	var optionScidVal uint8
+	if channel.OptionScidAlias {
+		optionScidVal = 1
+	}
+
+	optionScidRecord := tlv.MakePrimitiveRecord(
+		optionScidType, optionScidVal,
 	)
 
-	tlvStream, err := tlv.NewStream(keyLocRecord, otherScidRecord)
+	var scidFeatureVal uint8
+	if channel.ScidAliasFeature {
+		scidFeatureVal = 1
+	}
+
+	scidFeatureRecord := tlv.MakePrimitiveRecord(
+		scidFeatureType, scidFeatureVal,
+	)
+
+	realScidRecord := MakeScidRecord(
+		realScidType, &channel.confirmedScid,
+	)
+
+	tlvStream, err := tlv.NewStream(
+		keyLocRecord, zeroConfRecord, optionScidRecord,
+		scidFeatureRecord, realScidRecord,
+	)
 	if err != nil {
 		return err
 	}
@@ -3495,6 +3662,11 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 	}
 
 	if err := chanBucket.Put(chanInfoKey, w.Bytes()); err != nil {
+		return err
+	}
+
+	// Store the set of AliasScids if they exist.
+	if err := putAliasScids(chanBucket, channel.aliasScids); err != nil {
 		return err
 	}
 
@@ -3682,9 +3854,25 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 		}
 	}
 
+	var (
+		zeroConfVal    uint8
+		optionScidVal  uint8
+		scidFeatureVal uint8
+	)
+
 	keyLocRecord := MakeKeyLocRecord(keyLocType, &channel.RevocationKeyLocator)
-	scidRecord := MakeScidRecord(scidType, &channel.OtherShortChannelID)
-	tlvStream, err := tlv.NewStream(keyLocRecord, scidRecord)
+	zeroConfRecord := tlv.MakePrimitiveRecord(zeroConfType, &zeroConfVal)
+	optionScidRecord := tlv.MakePrimitiveRecord(
+		optionScidType, &optionScidVal,
+	)
+	scidFeatureRecord := tlv.MakePrimitiveRecord(
+		scidFeatureType, &scidFeatureVal,
+	)
+	realScidRecord := MakeScidRecord(realScidType, &channel.confirmedScid)
+	tlvStream, err := tlv.NewStream(
+		keyLocRecord, zeroConfRecord, optionScidRecord,
+		scidFeatureRecord, realScidRecord,
+	)
 	if err != nil {
 		return err
 	}
@@ -3693,7 +3881,25 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 		return err
 	}
 
+	if zeroConfVal != 0 {
+		channel.ZeroConf = true
+	}
+
+	if optionScidVal != 0 {
+		channel.OptionScidAlias = true
+	}
+
+	if scidFeatureVal != 0 {
+		channel.ScidAliasFeature = true
+	}
+
 	channel.Packager = NewChannelPackager(channel.ShortChannelID)
+
+	// Fetch the set of aliases for this channel if they exist.
+	channel.aliasScids = make([]lnwire.ShortChannelID, 0)
+	if err := getAliasScids(chanBucket, channel.aliasScids); err != nil {
+		return err
+	}
 
 	// Finally, read the optional shutdown scripts.
 	if err := getOptionalUpfrontShutdownScript(
@@ -3872,6 +4078,72 @@ func storeThawHeight(chanBucket kvdb.RwBucket, height uint32) error {
 
 func deleteThawHeight(chanBucket kvdb.RwBucket) error {
 	return chanBucket.Delete(frozenChanKey)
+}
+
+// putAliasScids stores the channel's AliasScids under the aliasKey if they
+// exist.
+// TODO: store aliases as keys with empty values to avoid writing every single
+// one?
+func putAliasScids(chanBucket kvdb.RwBucket,
+	aliases []lnwire.ShortChannelID) error {
+
+	// If aliases is empty, return early. This may not be a channel that
+	// supports aliases.
+	numAliases := uint32(len(aliases))
+	if numAliases == 0 {
+		return nil
+	}
+
+	// Store the set of aliases. We'll write the length first for the
+	// decoding routine.
+	var w bytes.Buffer
+
+	if err := WriteElement(&w, numAliases); err != nil {
+		return err
+	}
+
+	// Write each alias.
+	for i := 0; i < int(numAliases); i++ {
+		if err := WriteElement(&w, aliases[i]); err != nil {
+			return err
+		}
+	}
+
+	return chanBucket.Put(aliasKey, w.Bytes())
+}
+
+// getAliasScids fetches the channel's AliasScids if they exist under the
+// aliasKey.
+func getAliasScids(chanBucket kvdb.RBucket,
+	aliases []lnwire.ShortChannelID) error {
+
+	// If there is nothing stored under the key, then return early. This
+	// channel may not support aliases.
+	val := chanBucket.Get(aliasKey)
+	if val == nil {
+		return nil
+	}
+
+	r := bytes.NewReader(val)
+
+	// Read the number of stored aliases.
+	var numAliases uint32
+
+	if err := ReadElement(r, &numAliases); err != nil {
+		return err
+	}
+
+	// Iteratively read the alias SCIDs.
+	for i := 0; i < int(numAliases); i++ {
+		var alias lnwire.ShortChannelID
+		if err := ReadElement(r, &alias); err != nil {
+			return err
+		}
+
+		aliases = append(aliases, alias)
+	}
+
+	return nil
 }
 
 // EKeyLocator is an encoder for keychain.KeyLocator.

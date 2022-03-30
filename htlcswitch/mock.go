@@ -664,8 +664,6 @@ type mockChannelLink struct {
 
 	shortChanID lnwire.ShortChannelID
 
-	otherShortChanID lnwire.ShortChannelID
-
 	chanID lnwire.ChannelID
 
 	peer lnpeer.Peer

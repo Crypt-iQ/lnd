@@ -201,6 +201,11 @@ type ChannelReservation struct {
 	// nextRevocationKeyLoc stores the key locator information for this
 	// channel.
 	nextRevocationKeyLoc keychain.KeyLocator
+
+	// alias is the first scid alias that will be used in the channel. Only
+	// one needs to be stored since the reservation will be deleted by the
+	// time we send the first funding_locked.
+	alias lnwire.ShortChannelID
 }
 
 // NewChannelReservation creates a new channel reservation. This function is
@@ -212,7 +217,8 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 	id uint64, pushMSat lnwire.MilliSatoshi, chainHash *chainhash.Hash,
 	flags lnwire.FundingFlag, commitType CommitmentType,
 	fundingAssembler chanfunding.Assembler,
-	pendingChanID [32]byte, thawHeight uint32, zeroConf bool) (
+	pendingChanID [32]byte, thawHeight uint32, zeroConf,
+	optionScidAlias, scidAliasFeature bool) (
 	*ChannelReservation, error) {
 
 	var (
@@ -376,11 +382,6 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 		chanType |= channeldb.FrozenBit
 	}
 
-	// If the zeroConf bool is set, add the ZeroConfBit.
-	if zeroConf {
-		chanType |= channeldb.ZeroConfBit
-	}
-
 	return &ChannelReservation{
 		ourContribution: &ChannelContribution{
 			FundingAmount: ourBalance.ToSatoshis(),
@@ -409,8 +410,11 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 				FeePerKw:      btcutil.Amount(commitFeePerKw),
 				CommitFee:     commitFee,
 			},
-			ThawHeight: thawHeight,
-			Db:         wallet.Cfg.Database,
+			ThawHeight:       thawHeight,
+			Db:               wallet.Cfg.Database,
+			ZeroConf:         zeroConf,
+			OptionScidAlias:  optionScidAlias,
+			ScidAliasFeature: scidAliasFeature,
 		},
 		pushMSat:      pushMSat,
 		pendingChanID: pendingChanID,
@@ -420,22 +424,22 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 	}, nil
 }
 
-// SetAliasScid sets the alias ShortChannelID for an option_scid_alias channel.
-// For a zero-conf channel, this will be the partialState.ShortChannelID and
-// will be partialState.OtherChannelID otherwise.
-func (r *ChannelReservation) SetAliasScid(scid lnwire.ShortChannelID) {
+// AddAlias stores the first alias for zero-conf and option-scid-alias
+// channels. This alias is then stored and used when sending funding_locked.
+func (r *ChannelReservation) AddAlias(scid lnwire.ShortChannelID) {
 	r.Lock()
 	defer r.Unlock()
 
-	if r.partialState.ChanType.IsZeroConf() {
-		// Set the ShortChannelID since this is a zero-conf channel.
-		r.partialState.ShortChannelID = scid
-		return
-	}
+	r.alias = scid
+}
 
-	// Else, this is a regular-conf option_scid_alias channel. We'll set
-	// the OtherShortChannelID.
-	r.partialState.OtherShortChannelID = scid
+// GetAlias fetches the first alias for zero-conf and option-scid-alias
+// channels.
+func (r *ChannelReservation) GetAlias() lnwire.ShortChannelID {
+	r.RLock()
+	defer r.RUnlock()
+
+	return r.alias
 }
 
 // SetNumConfsRequired sets the number of confirmations that are required for
@@ -448,6 +452,15 @@ func (r *ChannelReservation) SetNumConfsRequired(numConfs uint16) {
 	defer r.Unlock()
 
 	r.partialState.NumConfsRequired = numConfs
+}
+
+// IsZeroConf returns if the reservation's underlying partial channel state is
+// a zero-conf channel.
+func (r *ChannelReservation) IsZeroConf() bool {
+	r.Lock()
+	defer r.Unlock()
+
+	return r.partialState.ZeroConf
 }
 
 // CommitConstraints takes the constraints that the remote party specifies for

@@ -110,9 +110,9 @@ func ChannelPoint(op wire.OutPoint) OptionalMsgField {
 // channels with peers where the option-scid-alias feature bit was negotiated.
 // The channel update will be added to the graph under the original SCID, but
 // will be modified and re-signed with this alias.
-func RemoteAlias(alias lnwire.ShortChannelID) OptionalMsgField {
+func RemoteAlias(alias *lnwire.ShortChannelID) OptionalMsgField {
 	return func(f *optionalMsgFields) {
-		f.remoteAlias = &alias
+		f.remoteAlias = alias
 	}
 }
 
@@ -300,6 +300,12 @@ type Config struct {
 	// remote's alias if the option-scid-alias feature bit was negotiated.
 	SignAliasUpdate func(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
 		error)
+
+	// FindBaseByAlias finds the SCID stored in the graph by an alias SCID.
+	// This is used for channels that have negotiated the option-scid-alias
+	// feature bit.
+	FindBaseByAlias func(alias lnwire.ShortChannelID) (
+		lnwire.ShortChannelID, error)
 }
 
 // cachedNetworkMsg is a wrapper around a network message that can be used with
@@ -2443,9 +2449,20 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// quickly reject it.
 	timestamp := time.Unix(int64(upd.Timestamp), 0)
 
-	// TODO4:
+	// Fetch the SCID we should be using to lock the channelMtx and make
+	// graph queries with.
+	graphScid, err := d.cfg.FindBaseByAlias(upd.ShortChannelID)
+	if err != nil {
+		// Fallback and set the graphScid to the peer-provided SCID.
+		// This will occur for non-option-scid-alias channels and for
+		// public option-scid-alias channels after 6 confirmations.
+		// Once public option-scid-alias channels have 6 confs, we'll
+		// ignore ChannelUpdates with one of their aliases.
+		graphScid = upd.ShortChannelID
+	}
+
 	if d.cfg.Router.IsStaleEdgePolicy(
-		upd.ShortChannelID, timestamp, upd.ChannelFlags,
+		graphScid, timestamp, upd.ChannelFlags,
 	) {
 
 		log.Debugf("Ignored stale edge policy: peer=%v, source=%x, "+
@@ -2466,15 +2483,9 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// access the database. This ensures the state we read from the
 	// database has not changed between this point and when we call
 	// UpdateEdge() later.
-
-	// TODO5:
-	d.channelMtx.Lock(upd.ShortChannelID.ToUint64())
-	defer d.channelMtx.Unlock(upd.ShortChannelID.ToUint64())
-
-	// TODO6:
-	chanInfo, e1, e2, err := d.cfg.Router.GetChannelByID(
-		upd.ShortChannelID,
-	)
+	d.channelMtx.Lock(graphScid.ToUint64())
+	defer d.channelMtx.Unlock(graphScid.ToUint64())
+	chanInfo, e1, e2, err := d.cfg.Router.GetChannelByID(graphScid)
 	switch err {
 	// No error, break.
 	case nil:
@@ -2647,7 +2658,9 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 	// ShortChannelID in the ChannelUpdate to avoid the router having to
 	// lookup the stored SCID. If we're sending the update, we'll always
 	// use the SCID stored in the database rather than a potentially
-	// different alias.
+	// different alias. This might mean that SigBytes is incorrect as it
+	// signs a different SCID than the database SCID, but since there will
+	// only be a difference if AuthProof == nil, this is fine.
 	update := &channeldb.ChannelEdgePolicy{
 		SigBytes:                  upd.Signature.ToSignatureBytes(),
 		ChannelID:                 chanInfo.ChannelID,

@@ -85,11 +85,7 @@ type scidAliasHandler interface {
 	// getAliases fetches the link's underlying aliases. This is used by
 	// the Switch to determine whether to forward an HTLC and where to
 	// forward an HTLC.
-	getAliases() []lnwire.ShortChannelID
-
-	// addAlias adds an alias to the underlying channel's set of aliases.
-	// This is called by the Switch to add an alias.
-	addAlias(alias lnwire.ShortChannelID) error
+	getAliases() ([]lnwire.ShortChannelID, error)
 
 	// isZeroConf returns whether or not the underlying channel is a
 	// zero-conf channel.

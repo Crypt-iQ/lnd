@@ -299,6 +299,11 @@ type ChannelLinkConfig struct {
 	// option_scid_alias channel.
 	FailAliasUpdate func(sid lnwire.ShortChannelID,
 		incoming bool) *lnwire.ChannelUpdate
+
+	// GetAliases is used by the link and switch to fetch the set of
+	// aliases for a given link.
+	GetAliases func(base lnwire.ShortChannelID) ([]lnwire.ShortChannelID,
+		error)
 }
 
 // localUpdateAddMsg contains a locally initiated htlc and a channel that will
@@ -756,7 +761,11 @@ func (l *channelLink) syncChanStates() error {
 			// channel since it does not matter which alias we
 			// send. We'll error out if no aliases are found.
 			if l.isZeroConf() || l.isOptionScidAlias() {
-				aliases := l.getAliases()
+				aliases, err := l.getAliases()
+				if err != nil {
+					return err
+				}
+
 				if len(aliases) == 0 {
 					// This shouldn't happen since we
 					// always add at least one alias before
@@ -2380,18 +2389,12 @@ func (l *channelLink) isOptionScidAlias() bool {
 	return l.channel.State().IsOptionScidAlias()
 }
 
-// getAliases returns the set of aliases for this channel.
+// getAliases returns the set of aliases for the underlying channel, erroring
+// if there are no aliases.
 //
 // Part of the scidAliasHandler interface.
-func (l *channelLink) getAliases() []lnwire.ShortChannelID {
-	return l.channel.State().GetAliases()
-}
-
-// addAlias adds an alias to the underlying channel's set of aliases.
-//
-// Part of the scidAliasHandler interface.
-func (l *channelLink) addAlias(alias lnwire.ShortChannelID) error {
-	return l.channel.State().AddAlias(alias)
+func (l *channelLink) getAliases() ([]lnwire.ShortChannelID, error) {
+	return l.cfg.GetAliases(l.ShortChanID())
 }
 
 // attachFailAliasUpdate sets the link's FailAliasUpdate function.

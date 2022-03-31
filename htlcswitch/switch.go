@@ -208,6 +208,9 @@ type Config struct {
 	// ChannelUpdate.
 	SignAliasUpdate func(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
 		error)
+
+	// IsAlias returns whether or not a given SCID is an alias.
+	IsAlias func(scid lnwire.ShortChannelID) bool
 }
 
 // Switch is the central messaging bus for all incoming/outgoing HTLCs.
@@ -318,10 +321,6 @@ type Switch struct {
 	// option-scid-alias channels. The key includes the value itself and
 	// also any other aliases. This MUST be accessed with the indexMtx.
 	baseIndex map[lnwire.ShortChannelID]lnwire.ShortChannelID
-
-	// aliasManager allows the Switch to expose various functions. The
-	// Switch uses the IsAlias function.
-	aliasManager *aliasStore
 }
 
 // New creates the new instance of htlc switch.
@@ -362,8 +361,6 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 		failAliasUpdate: s.failAliasUpdate,
 	})
 
-	s.aliasManager = newAliasStore(cfg.DB)
-
 	return s, nil
 }
 
@@ -374,29 +371,6 @@ type resolutionMsg struct {
 	contractcourt.ResolutionMsg
 
 	doneChan chan struct{}
-}
-
-// RequestAlias is called by outside subsystems so that they can request a
-// channel alias. By managing the aliases, we can ensure that no two aliases
-// are the same. An error is returned if the request failed.
-func (s *Switch) RequestAlias() (lnwire.ShortChannelID, error) {
-	return s.aliasManager.requestAlias()
-}
-
-// PutPeerAlias is called by outside subsystems so that they can place a peer's
-// alias into the aliasStore.
-func (s *Switch) PutPeerAlias(chanID lnwire.ChannelID,
-	alias lnwire.ShortChannelID) error {
-
-	return s.aliasManager.putPeerAlias(chanID, alias)
-}
-
-// GetPeerAlias is called by outside subsystems so that they can retrieve a
-// peer's alias via the ChannelID.
-func (s *Switch) GetPeerAlias(chanID lnwire.ChannelID) (lnwire.ShortChannelID,
-	error) {
-
-	return s.aliasManager.getPeerAlias(chanID)
 }
 
 // ProcessContractResolution is called by active contract resolvers once a
@@ -855,25 +829,8 @@ func (s *Switch) getLocalLink(pkt *htlcPacket, htlc *lnwire.UpdateAddHTLC) (
 	link, err := s.getLinkByShortID(pkt.outgoingChanID)
 	defer s.indexMtx.RUnlock()
 	if err != nil {
-		// If the link was not found for the outgoingChanID, an outside
-		// subsystem may be using the confirmed SCID of a zero-conf
-		// channel. In this case, we'll consult baseIndex and then
-		// lookup the link. This extra step is a consequence of not
-		// updating the Switch forwardingIndex when a zero-conf channel
-		// is confirmed. We don't need to change the outgoingChanID
-		// since the link will do that upon receiving the packet.
-		baseScid, ok := s.baseIndex[pkt.outgoingChanID]
-		if !ok {
-			log.Errorf("Link %v not found", pkt.outgoingChanID)
-			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
-		}
-
-		// An alias was found, so we'll use that to lookup the link.
-		link, err = s.getLinkByShortID(baseScid)
-		if err != nil {
-			log.Errorf("Link %v not found", baseScid)
-			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
-		}
+		log.Errorf("Link %v not found", pkt.outgoingChanID)
+		return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
 	}
 
 	if !link.EligibleToForward() {
@@ -2240,7 +2197,11 @@ func (s *Switch) addLiveLink(link ChannelLink) {
 	}
 	s.interfaceIndex[peerPub][link.ChanID()] = link
 
-	aliases := link.getAliases()
+	aliases, err := link.getAliases()
+	if err != nil {
+		// If an error is returned, just exit here.
+		return
+	}
 
 	if link.isZeroConf() {
 		if link.zeroConfConfirmed() {
@@ -2361,7 +2322,7 @@ func (s *Switch) getLinkByShortID(chanID lnwire.ShortChannelID) (ChannelLink, er
 func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	// Determine if this ShortChannelID is an alias or a confirmed SCID.
 	chanID := pkt.outgoingChanID
-	aliasID := IsAlias(chanID)
+	aliasID := s.cfg.IsAlias(chanID)
 
 	// Set the originalOutgoingChanID so the proper channel_update can be
 	// sent back for option_scid_alias or zero-conf channels.
@@ -2510,7 +2471,11 @@ func (s *Switch) UpdateShortChanID(chanID lnwire.ChannelID) error {
 
 	// Since the zero-conf channel is confirmed, we should populate the
 	// aliasToReal map and update the baseIndex.
-	aliases := link.getAliases()
+	aliases, err := link.getAliases()
+	if err != nil {
+		return err
+	}
+
 	confirmedScid := link.confirmedScid()
 
 	for _, alias := range aliases {
@@ -2699,7 +2664,7 @@ func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
 	// lookups for ChannelUpdate.
 	s.indexMtx.RLock()
 
-	if IsAlias(scid) {
+	if s.cfg.IsAlias(scid) {
 		// The alias SCID was used. In the incoming case this means
 		// the channel is zero-conf as the link sets the scid. In the
 		// outgoing case, the sender set the scid to use and may be
@@ -2780,7 +2745,12 @@ func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
 		return nil
 	}
 
-	aliases := link.getAliases()
+	aliases, err := link.getAliases()
+	if err != nil {
+		// Fallback if an error is returned.
+		return nil
+	}
+
 	if len(aliases) == 0 {
 		// This should never happen, but if it does, fallback.
 		return nil
@@ -2817,10 +2787,9 @@ func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
 	return update
 }
 
-// AddLinkAlias instructs the Switch to add an alias to the target link's
-// channel state, updating the Switch's maps in the process. It returns an
-// error on failure.
-func (s *Switch) AddLinkAlias(chanID lnwire.ChannelID,
+// AddAliasForLink instructs the Switch to update its in-memory maps to reflect
+// that a link has a new alias.
+func (s *Switch) AddAliasForLink(chanID lnwire.ChannelID,
 	alias lnwire.ShortChannelID) error {
 
 	// Fetch the link so that we can update the underlying channel's set of
@@ -2837,11 +2806,6 @@ func (s *Switch) AddLinkAlias(chanID lnwire.ChannelID,
 	if !link.isZeroConf() && !link.isOptionScidAlias() {
 		// TODO: actual error message?
 		return fmt.Errorf("attempted to update non-alias channel")
-	}
-
-	err = link.addAlias(alias)
-	if err != nil {
-		return err
 	}
 
 	linkScid := link.ShortChanID()

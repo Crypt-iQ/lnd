@@ -201,11 +201,6 @@ type ChannelReservation struct {
 	// nextRevocationKeyLoc stores the key locator information for this
 	// channel.
 	nextRevocationKeyLoc keychain.KeyLocator
-
-	// alias is the first scid alias that will be used in the channel. Only
-	// one needs to be stored since the reservation will be deleted by the
-	// time we send the first funding_locked.
-	alias lnwire.ShortChannelID
 }
 
 // NewChannelReservation creates a new channel reservation. This function is
@@ -424,22 +419,12 @@ func NewChannelReservation(capacity, localFundingAmt btcutil.Amount,
 	}, nil
 }
 
-// AddAlias stores the first alias for zero-conf and option-scid-alias
-// channels. This alias is then stored and used when sending funding_locked.
+// AddAlias stores the first alias for zero-conf channels.
 func (r *ChannelReservation) AddAlias(scid lnwire.ShortChannelID) {
 	r.Lock()
 	defer r.Unlock()
 
-	r.alias = scid
-}
-
-// GetAlias fetches the first alias for zero-conf and option-scid-alias
-// channels.
-func (r *ChannelReservation) GetAlias() lnwire.ShortChannelID {
-	r.RLock()
-	defer r.RUnlock()
-
-	return r.alias
+	r.partialState.ShortChannelID = scid
 }
 
 // SetNumConfsRequired sets the number of confirmations that are required for

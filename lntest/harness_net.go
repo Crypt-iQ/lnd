@@ -988,6 +988,10 @@ type OpenChannelParams struct {
 	// channel. This only works if the explicit negotiation is used with
 	// anchors or script enforced leases.
 	ZeroConf bool
+
+	// ScidAlias denotes whether the channel will be an option-scid-alias
+	// channel type negotiation.
+	ScidAlias bool
 }
 
 // OpenChannel attempts to open a channel between srcNode and destNode with the
@@ -1027,6 +1031,7 @@ func (n *NetworkHarness) OpenChannel(srcNode, destNode *HarnessNode,
 		SatPerByte:         int64(p.SatPerVByte),
 		CommitmentType:     p.CommitmentType,
 		ZeroConf:           p.ZeroConf,
+		ScidAlias:          p.ScidAlias,
 	}
 
 	// We need to use n.runCtx here to keep the response stream alive after

@@ -2755,7 +2755,9 @@ func (f *Manager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 	// hints. We'll send the first alias we find for the channel since it
 	// does not matter which alias we send. We'll error out in the odd case
 	// that no aliases are found.
+	fmt.Println("send fl")
 	if completeChan.IsZeroConf() || completeChan.IsOptionScidAlias() {
+		fmt.Println("send fl here")
 		aliases, err := f.cfg.GetAliases(completeChan.ShortChanID())
 		if err != nil {
 			return fmt.Errorf("unable to fetch aliases: %v", err)

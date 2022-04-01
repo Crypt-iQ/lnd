@@ -326,6 +326,11 @@ type Config struct {
 	// from the peer.
 	HandleCustomMessage func(peer [33]byte, msg *lnwire.Custom) error
 
+	// GetAliases is passed to created links so the Switch and link can be
+	// aware of the channel's aliases.
+	GetAliases func(base lnwire.ShortChannelID) ([]lnwire.ShortChannelID,
+		error)
+
 	// PongBuf is a slice we'll reuse instead of allocating memory on the
 	// heap. Since only reads will occur and no writes, there is no need
 	// for any synchronization primitives. As a result, it's safe to share
@@ -865,6 +870,7 @@ func (p *Brontide) addLink(chanPoint *wire.OutPoint,
 		NotifyActiveChannel:     p.cfg.ChannelNotifier.NotifyActiveChannelEvent,
 		NotifyInactiveChannel:   p.cfg.ChannelNotifier.NotifyInactiveChannelEvent,
 		HtlcNotifier:            p.cfg.HtlcNotifier,
+		GetAliases:              p.cfg.GetAliases,
 	}
 
 	// Before adding our new link, purge the switch of any pending or live

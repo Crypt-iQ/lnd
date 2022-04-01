@@ -391,16 +391,27 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 					continue
 				}
 
-				// Also check whether the OtherShortChanID was
-				// provided as a RouteHint.
-				otherScid := c.OtherShortChanID().ToUint64()
-				if _, ok := forcedHints[otherScid]; ok {
-					continue
+				// If this is a zero-conf channel, check if the
+				// confirmed SCID was used in forcedHints.
+				realScid := c.ZeroConfRealScid().ToUint64()
+				if c.IsZeroConf() {
+					if _, ok := forcedHints[realScid]; ok {
+						continue
+					}
 				}
 
 				chanID := lnwire.NewChanIDFromOutPoint(
 					&c.FundingOutpoint,
 				)
+
+				// Check whether the the peer's alias was
+				// provided in forcedHints.
+				peerAlias, _ := cfg.GetAlias(chanID)
+				peerScid := peerAlias.ToUint64()
+				if _, ok := forcedHints[peerScid]; ok {
+					continue
+				}
+
 				isActive := cfg.IsChannelActive(chanID)
 
 				hopHintInfo := newHopHintInfo(c, isActive)
@@ -543,8 +554,8 @@ func chanCanBeHopHint(channel *HopHintInfo, cfg *SelectHopHintsCfg) (
 		// In the case of zero-conf channels, it may be the case that
 		// the alias SCID was deleted from the graph, and replaced by
 		// the confirmed SCID. Check the Graph for the confirmed SCID.
-		otherScid := channel.OtherShortChannelID
-		info, p1, p2, err = cfg.FetchChannelEdgesByID(otherScid)
+		confirmedScid := channel.ConfirmedScidZC
+		info, p1, p2, err = cfg.FetchChannelEdgesByID(confirmedScid)
 		if err != nil {
 			log.Errorf("Unable to fetch the routing policies for "+
 				"the edges of the channel %v: %v",
@@ -612,33 +623,27 @@ type HopHintInfo struct {
 	// ShortChannelID is the short channel ID of the channel.
 	ShortChannelID uint64
 
-	// OtherShortChannelID is the other short channel ID of the channel.
-	// This will be the confirmed SCID for zero-conf channels.
-	OtherShortChannelID uint64
+	// ConfirmedScidZC is the confirmed SCID of a zero-conf channel. This
+	// may be used for looking up a channel in the graph.
+	ConfirmedScidZC uint64
 
-	// IsOptionScidAlias denotes whether the channel has negotiated
-	// option-scid-alias and has an alias. This channel may also be a
-	// zero-conf channel. This may be false for zero-conf channels before
-	// confirmation.
-	IsOptionScidAlias bool
-
-	// ZeroConf denotes whether the channel is a zero-conf channel.
-	ZeroConf bool
+	// ScidAliasFeature denotes whether the channel has negotiated the
+	// option-scid-alias feature bit.
+	ScidAliasFeature bool
 }
 
 func newHopHintInfo(c *channeldb.OpenChannel, isActive bool) *HopHintInfo {
 	isPublic := c.ChannelFlags&lnwire.FFAnnounceChannel != 0
 
 	return &HopHintInfo{
-		IsPublic:            isPublic,
-		IsActive:            isActive,
-		FundingOutpoint:     c.FundingOutpoint,
-		RemotePubkey:        c.IdentityPub,
-		RemoteBalance:       c.LocalCommitment.RemoteBalance,
-		ShortChannelID:      c.ShortChannelID.ToUint64(),
-		OtherShortChannelID: c.OtherShortChanID().ToUint64(),
-		IsOptionScidAlias:   c.IsOptionScidAlias(),
-		ZeroConf:            c.IsZeroConf(),
+		IsPublic:         isPublic,
+		IsActive:         isActive,
+		FundingOutpoint:  c.FundingOutpoint,
+		RemotePubkey:     c.IdentityPub,
+		RemoteBalance:    c.LocalCommitment.RemoteBalance,
+		ShortChannelID:   c.ShortChannelID.ToUint64(),
+		ConfirmedScidZC:  c.ZeroConfRealScid().ToUint64(),
+		ScidAliasFeature: c.ScidAliasFeature,
 	}
 }
 
@@ -744,12 +749,11 @@ func SelectHopHints(amtMSat lnwire.MilliSatoshi, cfg *SelectHopHintsCfg,
 		)
 		alias, _ := cfg.GetAlias(chanID)
 
-		// If this is an option_scid_alias channel or zero-conf channel
-		// and the alias is not yet assigned, we cannot issue an
-		// invoice. Doing so might expose the confirmed SCID of a
-		// private channel.
-		if channel.IsOptionScidAlias || channel.ZeroConf {
-
+		// If this is a channel where the option-scid-alias feature bit
+		// was negotiated and the alias is not yet assigned, we cannot
+		// issue an invoice. Doing so might expose the confirmed SCID
+		// of a private channel.
+		if channel.ScidAliasFeature {
 			var defaultScid lnwire.ShortChannelID
 			if alias == defaultScid {
 				continue
@@ -802,12 +806,11 @@ func SelectHopHints(amtMSat lnwire.MilliSatoshi, cfg *SelectHopHintsCfg,
 		)
 		alias, _ := cfg.GetAlias(chanID)
 
-		// If this is an option_scid_alias channel or zero-conf channel
-		// and the alias is not yet assigned, we cannot issue an
-		// invoice. Doing so might expose the confirmed SCID of a
-		// private channel.
-		if channel.IsOptionScidAlias || channel.ZeroConf {
-
+		// If this is a channel where the option-scid-alias feature bit
+		// was negotiated and the alias is not yet assigned, we cannot
+		// issue an invoice. Doing so might expose the confirmed SCID
+		// of a private channel.
+		if channel.ScidAliasFeature {
 			var defaultScid lnwire.ShortChannelID
 			if alias == defaultScid {
 				continue

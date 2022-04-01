@@ -1936,6 +1936,12 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		return nil
 	}
 
+	getAliases := func(base lnwire.ShortChannelID) (
+		[]lnwire.ShortChannelID, error) {
+
+		return nil, nil
+	}
+
 	// Instantiate with a long interval, so that we can precisely control
 	// the firing via force feeding.
 	bticker := ticker.NewForce(time.Hour)
@@ -1977,6 +1983,7 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		NotifyActiveChannel:   func(wire.OutPoint) {},
 		NotifyInactiveChannel: func(wire.OutPoint) {},
 		HtlcNotifier:          aliceSwitch.cfg.HtlcNotifier,
+		GetAliases:            getAliases,
 	}
 
 	aliceLink := NewChannelLink(aliceCfg, aliceLc.channel)
@@ -4487,6 +4494,12 @@ func (h *persistentLinkHarness) restartLink(
 		return nil
 	}
 
+	getAliases := func(base lnwire.ShortChannelID) (
+		[]lnwire.ShortChannelID, error) {
+
+		return nil, nil
+	}
+
 	// Instantiate with a long interval, so that we can precisely control
 	// the firing via force feeding.
 	bticker := ticker.NewForce(time.Hour)
@@ -4531,6 +4544,7 @@ func (h *persistentLinkHarness) restartLink(
 		NotifyInactiveChannel: func(wire.OutPoint) {},
 		HtlcNotifier:          aliceSwitch.cfg.HtlcNotifier,
 		SyncStates:            syncStates,
+		GetAliases:            getAliases,
 	}
 
 	aliceLink := NewChannelLink(aliceCfg, aliceChannel)
@@ -5796,7 +5810,7 @@ func TestCheckHtlcForward(t *testing.T) {
 		channel: testChannel.channel,
 	}
 
-	link.AttachFailAliasUpdate(failAliasUpdate)
+	link.attachFailAliasUpdate(failAliasUpdate)
 
 	var hash [32]byte
 

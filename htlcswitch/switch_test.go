@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	mrand "math/rand"
 	"os"
 	"reflect"
 	"testing"
@@ -61,6 +62,7 @@ func TestSwitchAddDuplicateLink(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceScid, emptyScid, alicePeer, false, false,
+		false, false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -107,6 +109,7 @@ func TestSwitchHasActiveLink(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceScid, emptyScid, alicePeer, false, false,
+		false, false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -164,13 +167,15 @@ func TestSwitchSendPending(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, pendingChanID, emptyScid, alicePeer, false, false,
+		false, false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
 	}
 
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(bobChannelLink); err != nil {
 		t.Fatalf("unable to add bob link: %v", err)
@@ -241,13 +246,17 @@ func TestSwitchForwardMapping(t *testing.T) {
 
 		// If this is true, then Alice's channel will be a zero-conf
 		// channel.
-		aliceZeroConf bool
+		zeroConf bool
 
-		// If this is true, then the alias will be used for forwarding.
+		// If this is true, then Alice's channel will be an
+		// option-scid-alias channel (channel type).
+		optionScid bool
+
+		// If this is true, then an alias will be used for forwarding.
 		useAlias bool
 
 		// This is Alice's channel alias. This may not be set if this
-		// is not an option_scid_alias channel.
+		// is not an option_scid_alias channel (channel type).
 		aliceAlias lnwire.ShortChannelID
 
 		// This is Alice's confirmed SCID. This may not be set if this
@@ -258,10 +267,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 		expectErr bool
 	}{
 		{
-			name:          "private unconfirmed zero-conf",
-			alicePrivate:  true,
-			aliceZeroConf: true,
-			useAlias:      true,
+			name:         "private unconfirmed zero-conf",
+			alicePrivate: true,
+			zeroConf:     true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10002,
 				TxIndex:     2,
@@ -271,10 +280,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "private confirmed zero-conf",
-			alicePrivate:  true,
-			aliceZeroConf: true,
-			useAlias:      true,
+			name:         "private confirmed zero-conf",
+			alicePrivate: true,
+			zeroConf:     true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10003,
 				TxIndex:     3,
@@ -288,10 +297,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "private confirmed zero-conf failure",
-			alicePrivate:  true,
-			aliceZeroConf: true,
-			useAlias:      false,
+			name:         "private confirmed zero-conf failure",
+			alicePrivate: true,
+			zeroConf:     true,
+			useAlias:     false,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10004,
 				TxIndex:     4,
@@ -305,10 +314,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name:          "public unconfirmed zero-conf",
-			alicePrivate:  false,
-			aliceZeroConf: true,
-			useAlias:      true,
+			name:         "public unconfirmed zero-conf",
+			alicePrivate: false,
+			zeroConf:     true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10005,
 				TxIndex:     5,
@@ -318,10 +327,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "public confirmed zero-conf w/ alias",
-			alicePrivate:  false,
-			aliceZeroConf: true,
-			useAlias:      true,
+			name:         "public confirmed zero-conf w/ alias",
+			alicePrivate: false,
+			zeroConf:     true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10006,
 				TxIndex:     6,
@@ -335,10 +344,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "public confirmed zero-conf w/ real",
-			alicePrivate:  false,
-			aliceZeroConf: true,
-			useAlias:      false,
+			name:         "public confirmed zero-conf w/ real",
+			alicePrivate: false,
+			zeroConf:     true,
+			useAlias:     false,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10007,
 				TxIndex:     7,
@@ -352,23 +361,20 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "private non-option channel",
-			alicePrivate:  true,
-			aliceZeroConf: false,
-			useAlias:      false,
-			aliceAlias:    lnwire.ShortChannelID{},
+			name:         "private non-option channel",
+			alicePrivate: true,
+			aliceAlias:   lnwire.ShortChannelID{},
 			aliceReal: lnwire.ShortChannelID{
 				BlockHeight: 505000,
 				TxIndex:     8,
 				TxPosition:  8,
 			},
-			expectErr: false,
 		},
 		{
-			name:          "private option channel w/ alias",
-			alicePrivate:  true,
-			aliceZeroConf: false,
-			useAlias:      true,
+			name:         "private option channel w/ alias",
+			alicePrivate: true,
+			optionScid:   true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10015,
 				TxIndex:     9,
@@ -382,10 +388,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "private option channel failure",
-			alicePrivate:  true,
-			aliceZeroConf: false,
-			useAlias:      false,
+			name:         "private option channel failure",
+			alicePrivate: true,
+			optionScid:   true,
+			useAlias:     false,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10016,
 				TxIndex:     16,
@@ -399,11 +405,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name:          "public non-option channel",
-			alicePrivate:  false,
-			aliceZeroConf: false,
-			useAlias:      false,
-			aliceAlias:    lnwire.ShortChannelID{},
+			name:         "public non-option channel",
+			alicePrivate: false,
+			useAlias:     false,
+			aliceAlias:   lnwire.ShortChannelID{},
 			aliceReal: lnwire.ShortChannelID{
 				BlockHeight: 508000,
 				TxIndex:     17,
@@ -412,10 +417,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "public option channel w/ alias",
-			alicePrivate:  false,
-			aliceZeroConf: false,
-			useAlias:      true,
+			name:         "public option channel w/ alias",
+			alicePrivate: false,
+			optionScid:   true,
+			useAlias:     true,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10018,
 				TxIndex:     18,
@@ -429,10 +434,10 @@ func TestSwitchForwardMapping(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:          "public option channel w/ real",
-			alicePrivate:  false,
-			aliceZeroConf: false,
-			useAlias:      false,
+			name:         "public option channel w/ real",
+			alicePrivate: false,
+			optionScid:   true,
+			useAlias:     false,
 			aliceAlias: lnwire.ShortChannelID{
 				BlockHeight: 10019,
 				TxIndex:     19,
@@ -452,8 +457,9 @@ func TestSwitchForwardMapping(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			testSwitchForwardMapping(
-				t, test.alicePrivate, test.aliceZeroConf,
-				test.useAlias, test.aliceAlias, test.aliceReal,
+				t, test.alicePrivate, test.zeroConf,
+				test.useAlias, test.optionScid,
+				test.aliceAlias, test.aliceReal,
 				test.expectErr,
 			)
 		})
@@ -461,7 +467,7 @@ func TestSwitchForwardMapping(t *testing.T) {
 }
 
 func testSwitchForwardMapping(t *testing.T, alicePrivate, aliceZeroConf,
-	useAlias bool, aliceAlias, aliceReal lnwire.ShortChannelID,
+	useAlias, optionScid bool, aliceAlias, aliceReal lnwire.ShortChannelID,
 	expectErr bool) {
 
 	alicePeer, err := newMockServer(
@@ -483,19 +489,24 @@ func testSwitchForwardMapping(t *testing.T, alicePrivate, aliceZeroConf,
 	// Create the lnwire.ChannelIDs that we'll use.
 	chanID1, chanID2, _, _ := genIDs()
 
-	// If this is a zero-conf, then the SCID in the Switch's maps will be
-	// the alias. Otherwise, it will be the real, confirmed SCID.
-	aliceScid := aliceReal
-	aliceOtherScid := aliceAlias
+	var aliceChannelLink *mockChannelLink
+
 	if aliceZeroConf {
-		aliceScid = aliceAlias
-		aliceOtherScid = aliceReal
+		aliceChannelLink = newMockChannelLink(
+			s, chanID1, aliceAlias, aliceReal, alicePeer, true,
+			alicePrivate, true, false,
+		)
+	} else {
+		aliceChannelLink = newMockChannelLink(
+			s, chanID1, aliceReal, emptyScid, alicePeer, true,
+			alicePrivate, false, optionScid,
+		)
+
+		if optionScid {
+			aliceChannelLink.addAlias(aliceAlias)
+		}
 	}
 
-	aliceChannelLink := newMockChannelLink(
-		s, chanID1, aliceScid, aliceOtherScid, alicePeer, true,
-		alicePrivate,
-	)
 	err = s.AddLink(aliceChannelLink)
 	require.NoError(t, err)
 
@@ -508,7 +519,8 @@ func testSwitchForwardMapping(t *testing.T, alicePrivate, aliceZeroConf,
 	}
 
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobScid, emptyScid, bobPeer, true, false,
+		s, chanID2, bobScid, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	err = s.AddLink(bobChannelLink)
 	require.NoError(t, err)
@@ -568,14 +580,18 @@ func testSwitchForwardMapping(t *testing.T, alicePrivate, aliceZeroConf,
 }
 
 // TestSwitchSendHTLCMapping tests that SendHTLC will properly route packets to
-// zero-conf channels if the confirmed SCID is used. It also tests that nothing
-// breaks with the mapping change.
+// zero-conf or option-scid-alias channels if the confirmed SCID is used. It
+// also tests that nothing breaks with the mapping change.
 func TestSwitchSendHTLCMapping(t *testing.T) {
 	tests := []struct {
 		name string
 
 		// If this is true, the channel will be zero-conf.
 		zeroConf bool
+
+		// Denotes whether the channel is option-scid-alias channel
+		// type.
+		scidAlias bool
 
 		// If this is true, then the alias will be used in the packet.
 		useAlias bool
@@ -587,9 +603,10 @@ func TestSwitchSendHTLCMapping(t *testing.T) {
 		real lnwire.ShortChannelID
 	}{
 		{
-			name:     "non-zero-conf real scid w/ option",
-			zeroConf: false,
-			useAlias: false,
+			name:      "non-zero-conf real scid w/ option",
+			zeroConf:  false,
+			scidAlias: true,
+			useAlias:  false,
 			alias: lnwire.ShortChannelID{
 				BlockHeight: 10010,
 				TxIndex:     10,
@@ -661,14 +678,14 @@ func TestSwitchSendHTLCMapping(t *testing.T) {
 			t.Parallel()
 			testSwitchSendHtlcMapping(
 				t, test.zeroConf, test.useAlias, test.alias,
-				test.real,
+				test.real, test.scidAlias,
 			)
 		})
 	}
 }
 
 func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
-	real lnwire.ShortChannelID) {
+	real lnwire.ShortChannelID, scidAlias bool) {
 
 	peer, err := newMockServer(
 		t, "alice", testStartingHeight, nil, testDefaultDelta,
@@ -684,18 +701,23 @@ func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
 	// Create the lnwire.ChannelID that we'll use.
 	chanID, _ := genID()
 
-	// If this channel is zero-conf, then the SCID in the Switch's maps
-	// will be the alias. Otherwise it's the confirmed SCID.
-	scid := real
-	otherScid := alias
+	var link *mockChannelLink
+
 	if zeroConf {
-		scid = alias
-		otherScid = real
+		link = newMockChannelLink(
+			s, chanID, alias, real, peer, true, false, true, false,
+		)
+	} else {
+		link = newMockChannelLink(
+			s, chanID, real, emptyScid, peer, true, false, false,
+			true,
+		)
+
+		if scidAlias {
+			link.addAlias(alias)
+		}
 	}
 
-	link := newMockChannelLink(
-		s, chanID, scid, otherScid, peer, true, false,
-	)
 	err = s.AddLink(link)
 	require.NoError(t, err)
 
@@ -720,8 +742,8 @@ func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
 	require.NoError(t, err)
 }
 
-// TestSwitchUpdateScid verifies that zero-conf channels will have entries in
-// the Switch maps after a call to UpdateShortChanID.
+// TestSwitchUpdateScid verifies that zero-conf and option-scid-alias channel
+// types will have the expected entries in the aliasToReal and baseIndex maps.
 func TestSwitchUpdateScid(t *testing.T) {
 	t.Parallel()
 
@@ -737,41 +759,123 @@ func TestSwitchUpdateScid(t *testing.T) {
 	defer func() { _ = s.Stop() }()
 
 	// Create the IDs that we'll use.
-	chanID, _ := genID()
+	chanID, chanID2, _, _ := genIDs()
+
+	alias := lnwire.ShortChannelID{
+		BlockHeight: 10000,
+		TxIndex:     0,
+		TxPosition:  0,
+	}
+	alias2 := alias
+	alias2.TxPosition = 1
+
+	realScid := lnwire.ShortChannelID{
+		BlockHeight: 500000,
+		TxIndex:     0,
+		TxPosition:  0,
+	}
 
 	link := newMockChannelLink(
-		s, chanID, startingAlias, emptyScid, peer, true, false,
+		s, chanID, alias, emptyScid, peer, true, false, true, false,
 	)
+	link.addAlias(alias2)
+
 	err = s.AddLink(link)
 	require.NoError(t, err)
 
-	// Assert that the Switch maps are not populated.
+	// Assert that the zero-conf link does not have entries in the
+	// aliasToReal map.
 	s.indexMtx.RLock()
-	lenAliasToReal := len(s.aliasToReal)
-	lenRealToAlias := len(s.realToAlias)
-	s.indexMtx.RUnlock()
-	require.Equal(t, 0, lenAliasToReal)
-	require.Equal(t, 0, lenRealToAlias)
+	_, ok := s.aliasToReal[alias]
+	require.False(t, ok)
+	_, ok = s.aliasToReal[alias2]
+	require.False(t, ok)
 
-	// We'll set the link's OtherShortChanID so that a subsequent call to
-	// UpdateShortChanID creates a mapping.
-	otherScid := lnwire.ShortChannelID{
-		BlockHeight: 400000,
-		TxIndex:     30000,
-		TxPosition:  15000,
-	}
-	link.otherShortChanID = otherScid
+	// Assert that both aliases point to the "base" SCID, which is actually
+	// just the first alias.
+	baseScid, ok := s.baseIndex[alias]
+	require.True(t, ok)
+	require.Equal(t, alias, baseScid)
+
+	baseScid, ok = s.baseIndex[alias2]
+	require.True(t, ok)
+	require.Equal(t, alias, baseScid)
+
+	s.indexMtx.RUnlock()
+
+	// We'll set the mock link's confirmed SCID so that UpdateShortChanID
+	// populates aliasToReal and adds an entry to baseIndex.
+	link.realScid = realScid
+	link.confirmedZC = true
 
 	err = s.UpdateShortChanID(chanID)
 	require.NoError(t, err)
 
-	// Assert that both maps are populated.
+	// Assert that aliasToReal is populated and there is an entry in
+	// baseIndex for realScid.
 	s.indexMtx.RLock()
-	_, realExists := s.aliasToReal[startingAlias]
-	_, aliasExists := s.realToAlias[otherScid]
+	real, ok := s.aliasToReal[alias]
+	require.True(t, ok)
+	require.Equal(t, realScid, real)
+
+	real, ok = s.aliasToReal[alias2]
+	require.True(t, ok)
+	require.Equal(t, realScid, real)
+
+	baseScid, ok = s.baseIndex[realScid]
+	require.True(t, ok)
+	require.Equal(t, alias, baseScid)
+
 	s.indexMtx.RUnlock()
-	require.True(t, realExists)
-	require.True(t, aliasExists)
+
+	// Now we'll perform the same checks with an option-scid-alias channel
+	// type channel.
+	optionReal := lnwire.ShortChannelID{
+		BlockHeight: 600000,
+		TxIndex:     0,
+		TxPosition:  0,
+	}
+	optionAlias := lnwire.ShortChannelID{
+		BlockHeight: 12000,
+		TxIndex:     0,
+		TxPosition:  0,
+	}
+	optionAlias2 := optionAlias
+	optionAlias2.TxPosition = 1
+	link2 := newMockChannelLink(
+		s, chanID2, optionReal, emptyScid, peer, true, false, false,
+		true,
+	)
+	link2.addAlias(optionAlias)
+	link2.addAlias(optionAlias2)
+
+	err = s.AddLink(link2)
+	require.NoError(t, err)
+
+	// Assert that the option-scid-alias link does have entries in the
+	// aliasToReal and baseIndex maps.
+	s.indexMtx.RLock()
+	real, ok = s.aliasToReal[optionAlias]
+	require.True(t, ok)
+	require.Equal(t, optionReal, real)
+
+	real, ok = s.aliasToReal[optionAlias2]
+	require.True(t, ok)
+	require.Equal(t, optionReal, real)
+
+	baseScid, ok = s.baseIndex[optionReal]
+	require.True(t, ok)
+	require.Equal(t, optionReal, baseScid)
+
+	baseScid, ok = s.baseIndex[optionAlias]
+	require.True(t, ok)
+	require.Equal(t, optionReal, baseScid)
+
+	baseScid, ok = s.baseIndex[optionAlias2]
+	require.True(t, ok)
+	require.Equal(t, optionReal, baseScid)
+
+	s.indexMtx.RUnlock()
 }
 
 // TestSwitchForward checks the ability of htlc switch to forward add/settle
@@ -805,9 +909,11 @@ func TestSwitchForward(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -930,9 +1036,11 @@ func TestSwitchForwardFailAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1025,9 +1133,11 @@ func TestSwitchForwardFailAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s2, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s2.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1129,9 +1239,11 @@ func TestSwitchForwardSettleAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1224,9 +1336,11 @@ func TestSwitchForwardSettleAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s2, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s2.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1331,9 +1445,11 @@ func TestSwitchForwardDropAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1418,9 +1534,11 @@ func TestSwitchForwardDropAfterFullAdd(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s2, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s2.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1496,9 +1614,11 @@ func TestSwitchForwardFailAfterHalfAdd(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1578,9 +1698,11 @@ func TestSwitchForwardFailAfterHalfAdd(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s2, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s2.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1662,9 +1784,11 @@ func TestSwitchForwardCircuitPersistence(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1743,9 +1867,11 @@ func TestSwitchForwardCircuitPersistence(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s2, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s2.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1832,9 +1958,11 @@ func TestSwitchForwardCircuitPersistence(t *testing.T) {
 
 	aliceChannelLink = newMockChannelLink(
 		s3, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink = newMockChannelLink(
-		s3, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s3, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s3.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -1915,7 +2043,7 @@ func TestCircularForwards(t *testing.T) {
 
 			aliceChannelLink := newMockChannelLink(
 				s, chanID1, aliceChanID, emptyScid, alicePeer,
-				true, false,
+				true, false, false, false,
 			)
 
 			if err := s.AddLink(aliceChannelLink); err != nil {
@@ -2081,23 +2209,13 @@ func TestCheckCircularForward(t *testing.T) {
 			defer func() { _ = s.Stop() }()
 
 			if test.aliasMapping {
-				var (
-					aliasScid lnwire.ShortChannelID
-					confScid  lnwire.ShortChannelID
-				)
-
-				if IsAlias(test.outgoingLink) {
-					aliasScid = test.outgoingLink
-					confScid = test.incomingLink
-				} else {
-					aliasScid = test.incomingLink
-					confScid = test.outgoingLink
-				}
-
-				// Setup the maps in the Switch.
+				// Make the incoming and outgoing point to the
+				// same base SCID.
+				inScid := test.incomingLink
+				outScid := test.outgoingLink
 				s.indexMtx.Lock()
-				s.aliasToReal[aliasScid] = confScid
-				s.realToAlias[confScid] = aliasScid
+				s.baseIndex[inScid] = outScid
+				s.baseIndex[outScid] = outScid
 				s.indexMtx.Unlock()
 			}
 
@@ -2205,6 +2323,7 @@ func testSkipIneligibleLinksMultiHopForward(t *testing.T,
 	chanID1, aliceChanID := genID()
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 
 	// We'll create a link for Bob, but mark the link as unable to forward
@@ -2212,14 +2331,14 @@ func testSkipIneligibleLinksMultiHopForward(t *testing.T,
 	chanID2, bobChanID2 := genID()
 	bobChannelLink1 := newMockChannelLink(
 		s, chanID2, bobChanID2, emptyScid, bobPeer, testCase.eligible1,
-		false,
+		false, false, false,
 	)
 	bobChannelLink1.checkHtlcForwardResult = testCase.failure1
 
 	chanID3, bobChanID3 := genID()
 	bobChannelLink2 := newMockChannelLink(
 		s, chanID3, bobChanID3, emptyScid, bobPeer, testCase.eligible2,
-		false,
+		false, false, false,
 	)
 	bobChannelLink2.checkHtlcForwardResult = testCase.failure2
 
@@ -2332,6 +2451,7 @@ func testSkipLinkLocalForward(t *testing.T, eligible bool,
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, eligible, false,
+		false, false,
 	)
 	aliceChannelLink.checkHtlcTransitResult = NewLinkError(
 		policyResult,
@@ -2394,9 +2514,11 @@ func TestSwitchCancel(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -2509,9 +2631,11 @@ func TestSwitchAddSamePayment(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -2668,6 +2792,7 @@ func TestSwitchSendPayment(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add link: %v", err)
@@ -3212,6 +3337,7 @@ func TestInvalidFailure(t *testing.T) {
 	// Set up a mock channel link.
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add link: %v", err)
@@ -3814,9 +3940,11 @@ func TestSwitchHoldForward(t *testing.T) {
 
 	aliceChannelLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	bobChannelLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	if err := s.AddLink(aliceChannelLink); err != nil {
 		t.Fatalf("unable to add alice link: %v", err)
@@ -4210,18 +4338,21 @@ func TestSwitchMailboxDust(t *testing.T) {
 
 	aliceLink := newMockChannelLink(
 		s, chanID1, aliceChanID, emptyScid, alicePeer, true, false,
+		false, false,
 	)
 	err = s.AddLink(aliceLink)
 	require.NoError(t, err)
 
 	bobLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	err = s.AddLink(bobLink)
 	require.NoError(t, err)
 
 	carolLink := newMockChannelLink(
 		s, chanID3, carolChanID, emptyScid, carolPeer, true, false,
+		false, false,
 	)
 	err = s.AddLink(carolLink)
 	require.NoError(t, err)
@@ -4310,7 +4441,7 @@ func TestSwitchForwardFailAlias(t *testing.T) {
 		name string
 
 		// Whether or not Alice will be a zero-conf channel or an
-		// option-scid-alias channel.
+		// option-scid-alias channel (channel type).
 		zeroConf bool
 	}{
 		{
@@ -4359,7 +4490,7 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 	err = s.Start()
 	require.NoError(t, err)
 
-	// Make Alice's channel zero-conf or option-scid-alias.
+	// Make Alice's channel zero-conf or option-scid-alias (channel type).
 	aliceAlias := lnwire.ShortChannelID{
 		BlockHeight: 10000,
 		TxIndex:     5,
@@ -4370,19 +4501,21 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 	if zeroConf {
 		aliceLink = newMockChannelLink(
 			s, chanID1, aliceAlias, aliceChanID, alicePeer, true,
-			true,
+			true, true, false,
 		)
 	} else {
 		aliceLink = newMockChannelLink(
-			s, chanID1, aliceChanID, aliceAlias, alicePeer, true,
-			true,
+			s, chanID1, aliceChanID, emptyScid, alicePeer, true,
+			true, false, true,
 		)
+		aliceLink.addAlias(aliceAlias)
 	}
 	err = s.AddLink(aliceLink)
 	require.NoError(t, err)
 
 	bobLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	err = s.AddLink(bobLink)
 	require.NoError(t, err)
@@ -4441,19 +4574,21 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 	if zeroConf {
 		aliceLink2 = newMockChannelLink(
 			s2, chanID1, aliceAlias, aliceChanID, alicePeer, true,
-			true,
+			true, true, false,
 		)
 	} else {
 		aliceLink2 = newMockChannelLink(
-			s2, chanID1, aliceChanID, aliceAlias, alicePeer, true,
-			true,
+			s2, chanID1, aliceChanID, emptyScid, alicePeer, true,
+			true, false, true,
 		)
+		aliceLink2.addAlias(aliceAlias)
 	}
 	err = s2.AddLink(aliceLink2)
 	require.NoError(t, err)
 
 	bobLink2 := newMockChannelLink(
-		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false,
+		s2, chanID2, bobChanID, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	err = s2.AddLink(bobLink2)
 	require.NoError(t, err)
@@ -4481,19 +4616,18 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 // switch rather than the mailbox because the mailbox tests do not have the
 // proper context (e.g. the Switch's failAliasUpdate function). The caveat here
 // is that if the private UTXO is already known, it is fine to send a failure
-// back. This tests option-scid-alias and zero-conf channels.
+// back. This tests option-scid-alias and zero-conf channels (channel type).
 func TestSwitchAliasFailAdd(t *testing.T) {
 	tests := []struct {
 		name string
 
-		// Denotes whether the opened channel will be zero-conf or
-		// option-scid-alias.
+		// Denotes whether the opened channel will be zero-conf.
 		zeroConf bool
 
 		// Denotes whether the opened channel will be private.
 		private bool
 
-		// Denotes whether the alias was used during forwarding.
+		// Denotes whether an alias was used during forwarding.
 		useAlias bool
 	}{
 		{
@@ -4580,30 +4714,36 @@ func testSwitchAliasFailAdd(t *testing.T, zeroConf, private, useAlias bool) {
 		_ = os.RemoveAll(tempPath)
 	}()
 
-	// Make Alice's channel zero-conf or option-scid-alias.
+	// Make Alice's channel zero-conf or option-scid-alias (channel type).
 	aliceAlias := lnwire.ShortChannelID{
 		BlockHeight: 10000,
 		TxIndex:     5,
 		TxPosition:  5,
 	}
+	aliceAlias2 := aliceAlias
+	aliceAlias2.TxPosition = 6
 
 	var aliceLink *mockChannelLink
 	if zeroConf {
 		aliceLink = newMockChannelLink(
 			s, chanID1, aliceAlias, aliceChanID, alicePeer, true,
-			private,
+			private, true, false,
 		)
+		aliceLink.addAlias(aliceAlias2)
 	} else {
 		aliceLink = newMockChannelLink(
-			s, chanID1, aliceChanID, aliceAlias, alicePeer, true,
-			private,
+			s, chanID1, aliceChanID, emptyScid, alicePeer, true,
+			private, false, true,
 		)
+		aliceLink.addAlias(aliceAlias)
+		aliceLink.addAlias(aliceAlias2)
 	}
 	err = s.AddLink(aliceLink)
 	require.NoError(t, err)
 
 	bobLink := newMockChannelLink(
-		s, chanID2, bobChanID, emptyScid, bobPeer, true, true,
+		s, chanID2, bobChanID, emptyScid, bobPeer, true, true, false,
+		false,
 	)
 	err = s.AddLink(bobLink)
 	require.NoError(t, err)
@@ -4624,7 +4764,12 @@ func testSwitchAliasFailAdd(t *testing.T, zeroConf, private, useAlias bool) {
 	// Determine which outgoingChanID to set based on the useAlias boolean.
 	outgoingChanID := aliceChanID
 	if useAlias {
-		outgoingChanID = aliceAlias
+		// Choose randomly from the 2 possible aliases.
+		aliases, err := aliceLink.getAliases()
+		require.NoError(t, err)
+		idx := mrand.Intn(len(aliases))
+
+		outgoingChanID = aliases[idx]
 	}
 
 	ogPacket.outgoingChanID = outgoingChanID
@@ -4661,9 +4806,12 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 	tests := []struct {
 		name string
 
-		// Denotes whether or not the channel will be zero-conf or
-		// option-scid-alias.
+		// Denotes whether or not the channel will be zero-conf.
 		zeroConf bool
+
+		// Denotes whether or not the channel will have negotiated the
+		// option-scid-alias channel type.
+		scidAlias bool
 
 		// Denotes whether or not the channel will be private.
 		private bool
@@ -4691,22 +4839,25 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 			useAlias: true,
 		},
 		{
-			name:     "public option-scid-alias using alias",
-			zeroConf: false,
-			private:  false,
-			useAlias: true,
+			name:      "public option-scid-alias using alias",
+			zeroConf:  false,
+			scidAlias: true,
+			private:   false,
+			useAlias:  true,
 		},
 		{
-			name:     "public option-scid-alias using real",
-			zeroConf: false,
-			private:  false,
-			useAlias: false,
+			name:      "public option-scid-alias using real",
+			zeroConf:  false,
+			scidAlias: true,
+			private:   false,
+			useAlias:  false,
 		},
 		{
-			name:     "private option-scid-alias using alias",
-			zeroConf: false,
-			private:  true,
-			useAlias: true,
+			name:      "private option-scid-alias using alias",
+			zeroConf:  false,
+			scidAlias: true,
+			private:   true,
+			useAlias:  true,
 		},
 	}
 
@@ -4716,13 +4867,14 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			testSwitchHandlePacketForward(
 				t, test.zeroConf, test.private, test.useAlias,
+				test.scidAlias,
 			)
 		})
 	}
 }
 
 func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
-	useAlias bool) {
+	useAlias, scidAlias bool) {
 
 	t.Parallel()
 
@@ -4749,25 +4901,40 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 		TxIndex:     5,
 		TxPosition:  5,
 	}
+	aliceAlias2 := aliceAlias
+	aliceAlias2.TxPosition = 6
 
 	aliceChannelLink := aliceLink.(*channelLink)
 	aliceChannelState := aliceChannelLink.channel.State()
+
+	// Set the link's GetAliases function.
+	aliceChannelLink.cfg.GetAliases = func(base lnwire.ShortChannelID) (
+		[]lnwire.ShortChannelID, error) {
+
+		return []lnwire.ShortChannelID{aliceAlias, aliceAlias2}, nil
+	}
 
 	if !private {
 		// Change the channel to public depending on the test.
 		aliceChannelState.ChannelFlags = lnwire.FFAnnounceChannel
 	}
 
+	// If this is an option-scid-alias channel, we'll mark the channel as
+	// such.
+	if scidAlias {
+		aliceChannelState.OptionScidAlias = true
+	}
+
+	// This is the ShortChannelID field in the OpenChannel struct.
 	aliceScid := aliceLink.ShortChanID()
 	if zeroConf {
-		// Store the alias in the shortChanID field and put the
-		// generated ShortChannelID in the OtherShortChannelID field.
+		// Store the alias in the shortChanID field and mark the real
+		// scid in the database.
 		aliceChannelLink.shortChanID = aliceAlias
-		aliceChannelState.OtherShortChannelID = aliceScid
-	} else {
-		// In the option-scid-alias case, we just need to store the
-		// alias in OtherShortChannelID.
-		aliceChannelState.OtherShortChannelID = aliceAlias
+		err = aliceChannelState.MarkRealScid(aliceScid)
+		require.NoError(t, err)
+
+		aliceChannelState.ZeroConf = true
 	}
 
 	err = s.AddLink(aliceLink)
@@ -4781,7 +4948,8 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 	require.NoError(t, err)
 
 	bobLink := newMockChannelLink(
-		s, bobChanID, bobScid, emptyScid, bobPeer, true, false,
+		s, bobChanID, bobScid, emptyScid, bobPeer, true, false, false,
+		false,
 	)
 	err = s.AddLink(bobLink)
 	require.NoError(t, err)
@@ -4801,7 +4969,12 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 	// Determine which outgoingChanID to set based on the useAlias bool.
 	outgoingChanID := aliceScid
 	if useAlias {
-		outgoingChanID = aliceAlias
+		// Choose from the possible aliases.
+		aliases, err := aliceLink.getAliases()
+		require.NoError(t, err)
+		idx := mrand.Intn(len(aliases))
+
+		outgoingChanID = aliases[idx]
 	}
 
 	ogPacket.outgoingChanID = outgoingChanID
@@ -4825,13 +4998,14 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 
 // TestSwitchAliasInterceptFail tests that when the InterceptableSwitch fails
 // an incoming HTLC, it does not leak the on-chain UTXO for option-scid-alias
-// or zero-conf channels.
+// or zero-conf channels (channel type).
 func TestSwitchAliasInterceptFail(t *testing.T) {
 	tests := []struct {
 		name string
 
 		// Denotes whether or not the incoming channel is a zero-conf
-		// channel or an option-scid-alias channel instead.
+		// channel or an option-scid-alias channel instead (channel
+		// type).
 		zeroConf bool
 	}{
 		{
@@ -4886,18 +5060,23 @@ func testSwitchAliasInterceptFail(t *testing.T, zeroConf bool) {
 		TxIndex:     5,
 		TxPosition:  5,
 	}
+	aliceAlias2 := aliceAlias
+	aliceAlias2.TxPosition = 6
 
 	var aliceLink *mockChannelLink
 	if zeroConf {
 		aliceLink = newMockChannelLink(
 			s, chanID, aliceAlias, aliceScid, alicePeer, true,
-			true,
+			true, true, false,
 		)
+		aliceLink.addAlias(aliceAlias2)
 	} else {
 		aliceLink = newMockChannelLink(
-			s, chanID, aliceScid, aliceAlias, alicePeer, true,
-			true,
+			s, chanID, aliceScid, emptyScid, alicePeer, true,
+			true, false, true,
 		)
+		aliceLink.addAlias(aliceAlias)
+		aliceLink.addAlias(aliceAlias2)
 	}
 	err = s.AddLink(aliceLink)
 	require.NoError(t, err)
@@ -4925,7 +5104,9 @@ func testSwitchAliasInterceptFail(t *testing.T, zeroConf bool) {
 	err = interceptSwitch.ForwardPackets(nil, ogPacket)
 	require.NoError(t, err)
 
-	err = forwardInterceptor.fail()
+	err = forwardInterceptor.failWithCode(
+		lnwire.CodeTemporaryChannelFailure,
+	)
 	require.NoError(t, err)
 
 	select {
@@ -4941,7 +5122,9 @@ func testSwitchAliasInterceptFail(t *testing.T, zeroConf bool) {
 		failureMsg, ok := failure.(*lnwire.FailTemporaryChannelFailure)
 		require.True(t, ok)
 
-		require.Equal(t, aliceAlias, failureMsg.Update.ShortChannelID)
+		failScid := failureMsg.Update.ShortChannelID
+		isAlias := failScid == aliceAlias || failScid == aliceAlias2
+		require.True(t, isAlias)
 
 	case <-s.quit:
 		t.Fatalf("switch shutting down, failed to receive failure")

@@ -122,12 +122,9 @@ func newManager(cfg Config, desc setDesc) (*Manager, error) {
 		if cfg.NoOptionScidAlias {
 			raw.Unset(lnwire.ScidAliasOptional)
 			raw.Unset(lnwire.ScidAliasRequired)
-
-			// TODO: disable zero-conf
+			raw.Unset(lnwire.ZeroConfOptional)
+			raw.Unset(lnwire.ZeroConfRequired)
 		}
-		// if cfg.NoZeroConf {
-		// 	// TODO
-		// }
 
 		// Ensure that all of our feature sets properly set any
 		// dependent features.

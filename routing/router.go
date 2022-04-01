@@ -358,6 +358,10 @@ type Config struct {
 	// Otherwise, we'll only prune the channel when both edges have a very
 	// dated last update.
 	StrictZombiePruning bool
+
+	// IsAlias returns whether a passed ShortChannelID is an alias. This is
+	// only used for our local channels.
+	IsAlias func(scid lnwire.ShortChannelID) bool
 }
 
 // EdgeLocator is a struct used to identify a specific edge.
@@ -1460,7 +1464,7 @@ func (r *ChannelRouter) processUpdate(msg interface{},
 		// is not a DoS vector as only we can add a ChannelAnnouncement
 		// that the gossiper sees as premature.
 		scid := lnwire.NewShortChanIDFromInt(msg.ChannelID)
-		if r.cfg.AssumeChannelValid || htlcswitch.IsAlias(scid) {
+		if r.cfg.AssumeChannelValid || r.cfg.IsAlias(scid) {
 			if err := r.cfg.Graph.AddChannelEdge(msg, op...); err != nil {
 				return fmt.Errorf("unable to add edge: %v", err)
 			}

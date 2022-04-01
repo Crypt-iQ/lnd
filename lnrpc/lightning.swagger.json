@@ -5390,6 +5390,10 @@
         "zero_conf": {
           "type": "boolean",
           "description": "If this is true, then a zero-conf channel open will be attempted."
+        },
+        "scid_alias": {
+          "type": "boolean",
+          "description": "If this is true, then an option-scid-alias channel-type open will be\nattempted."
         }
       }
     },

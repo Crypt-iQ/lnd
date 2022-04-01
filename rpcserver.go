@@ -2005,8 +2005,12 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 			lnwire.AnchorsZeroFeeHtlcTxRequired,
 		)
 
+		// The feature bit does not match the chan type.
 		if in.ZeroConf {
-			fv.Set(lnwire.ZeroConfRequired)
+			fv.Set(lnwire.ZeroConfChanType)
+		} else if in.ScidAlias {
+			// This is mutually exclusive with zero-conf.
+			fv.Set(lnwire.ScidAliasChanType)
 		}
 
 		*channelType = lnwire.ChannelType(*fv)
@@ -2019,8 +2023,12 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 			lnwire.ScriptEnforcedLeaseRequired,
 		)
 
+		// The feature bit does not match the chan type.
 		if in.ZeroConf {
-			fv.Set(lnwire.ZeroConfRequired)
+			fv.Set(lnwire.ZeroConfChanType)
+		} else if in.ScidAlias {
+			// This is mutually exclusive with zero-conf.
+			fv.Set(lnwire.ScidAliasChanType)
 		}
 
 		*channelType = lnwire.ChannelType(*fv)
@@ -5235,7 +5243,7 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		GenAmpInvoiceFeatures: func() *lnwire.FeatureVector {
 			return r.server.featureMgr.Get(feature.SetInvoiceAmp)
 		},
-		GetAlias: r.server.htlcSwitch.GetPeerAlias,
+		GetAlias: r.server.aliasMgr.getPeerAlias,
 	}
 
 	value, err := lnrpc.UnmarshallAmt(invoice.Value, invoice.ValueMsat)

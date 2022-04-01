@@ -244,6 +244,8 @@ type server struct {
 	// channel DB that haven't been separated out yet.
 	miscDB *channeldb.DB
 
+	aliasMgr *aliasMgr
+
 	htlcSwitch *htlcswitch.Switch
 
 	interceptableSwitch *htlcswitch.InterceptableSwitch
@@ -620,6 +622,11 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	thresholdSats := btcutil.Amount(cfg.DustThreshold)
 	thresholdMSats := lnwire.NewMSatFromSatoshis(thresholdSats)
 
+	s.aliasMgr, err = newAliasMgr(dbs.ChanStateDB)
+	if err != nil {
+		return nil, err
+	}
+
 	s.htlcSwitch, err = htlcswitch.New(htlcswitch.Config{
 		DB:                   dbs.ChanStateDB,
 		FetchAllOpenChannels: s.chanStateDB.FetchAllOpenChannels,
@@ -653,6 +660,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		HTLCExpiry:             htlcswitch.DefaultHTLCExpiry,
 		DustThreshold:          thresholdMSats,
 		SignAliasUpdate:        s.signAliasUpdate,
+		IsAlias:                isAlias,
 	}, uint32(currentHeight))
 	if err != nil {
 		return nil, err
@@ -908,6 +916,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		PathFindingConfig:   pathFindingConfig,
 		Clock:               clock.NewDefaultClock(),
 		StrictZombiePruning: strictPruning,
+		IsAlias:             isAlias,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("can't create router: %v", err)
@@ -950,8 +959,9 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		PinnedSyncers:           cfg.Gossip.PinnedSyncers,
 		MaxChannelUpdateBurst:   cfg.Gossip.MaxChannelUpdateBurst,
 		ChannelUpdateInterval:   cfg.Gossip.ChannelUpdateInterval,
-		IsAlias:                 htlcswitch.IsAlias,
+		IsAlias:                 isAlias,
 		SignAliasUpdate:         s.signAliasUpdate,
+		FindBaseByAlias:         s.aliasMgr.findBaseSCID,
 	}, nodeKeyDesc)
 
 	s.localChanMgr = &localchans.Manager{
@@ -1347,10 +1357,13 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		RegisteredChains:              cfg.registeredChains,
 		MaxAnchorsCommitFeeRate: chainfee.SatPerKVByte(
 			s.cfg.MaxCommitFeeRateAnchors * 1000).FeePerKWeight(),
-		RequestAlias:    s.htlcSwitch.RequestAlias,
-		PutAlias:        s.htlcSwitch.PutPeerAlias,
-		GetAlias:        s.htlcSwitch.GetPeerAlias,
+		RequestAlias:    s.aliasMgr.requestAlias,
+		PutAlias:        s.aliasMgr.putPeerAlias,
+		GetAlias:        s.aliasMgr.getPeerAlias,
 		DeleteAliasEdge: deleteAliasEdge,
+		AddLocalAlias:   s.aliasMgr.addLocalAlias,
+		GetAliases:      s.aliasMgr.getAliases,
+		DeleteSixConfs:  s.aliasMgr.deleteSixConfs,
 	})
 	if err != nil {
 		return nil, err
@@ -3550,6 +3563,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 		ChannelCommitInterval:  s.cfg.ChannelCommitInterval,
 		ChannelCommitBatchSize: s.cfg.ChannelCommitBatchSize,
 		HandleCustomMessage:    s.handleCustomMessage,
+		GetAliases:             s.aliasMgr.getAliases,
 		Quit:                   s.quit,
 	}
 

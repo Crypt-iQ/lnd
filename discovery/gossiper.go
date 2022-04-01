@@ -2432,9 +2432,14 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 
 	// If the advertised inclusionary block is beyond our knowledge of the
 	// chain tip, then we'll put the announcement in limbo to be fully
-	// verified once we advance forward in the chain.
+	// verified once we advance forward in the chain. If the update has an
+	// alias SCID, we'll skip the isPremature check. In mainnet this isn't
+	// necessary, but for regtest the isPremature check would be triggered
+	// since aliases start at height 10000.
 	d.Lock()
-	if nMsg.isRemote && d.isPremature(upd.ShortChannelID, 0, nMsg) {
+	if nMsg.isRemote && !d.cfg.IsAlias(upd.ShortChannelID) &&
+		d.isPremature(upd.ShortChannelID, 0, nMsg) {
+
 		log.Warnf("Update announcement for short_chan_id(%v), is "+
 			"premature: advertises height %v, only height %v is "+
 			"known", shortChanID, blockHeight, d.bestHeight)
@@ -2459,6 +2464,9 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		// Once public option-scid-alias channels have 6 confs, we'll
 		// ignore ChannelUpdates with one of their aliases.
 		graphScid = upd.ShortChannelID
+		fmt.Printf("didnt find base by alias: %v", graphScid)
+	} else {
+		fmt.Printf("found base by alias: %v", graphScid)
 	}
 
 	if d.cfg.Router.IsStaleEdgePolicy(

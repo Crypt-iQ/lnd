@@ -236,6 +236,7 @@ func testPrivateOptionScidAlias(net *lntest.NetworkHarness, t *harnessTest) {
 		Amt:            chanAmt,
 		Private:        true,
 		CommitmentType: lnrpc.CommitmentType_ANCHORS,
+		ScidAlias:      true,
 	}
 	fundingPoint := openChannelAndAssert(t, net, carol, dave, params)
 
@@ -431,6 +432,7 @@ func testPrivateUpdateAlias(net *lntest.NetworkHarness, t *harnessTest,
 		Private:        true,
 		CommitmentType: lnrpc.CommitmentType_ANCHORS,
 		ZeroConf:       zeroConf,
+		ScidAlias:      !zeroConf,
 	}
 	chanOpenUpdate := openChannelStream(t, net, carol, dave, params)
 

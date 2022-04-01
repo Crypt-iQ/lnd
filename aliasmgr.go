@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/lightningnetwork/lnd/htlcswitch/hop"
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
@@ -57,13 +58,16 @@ var (
 
 	// errNoBase is returned when a base SCID isn't found.
 	errNoBase = fmt.Errorf("no base found")
+
+	// errNoPeerAlias is returned when the peer's alias for a given
+	// channel is not found.
+	errNoPeerAlias = fmt.Errorf("no peer alias found")
 )
 
-// aliasMgr ...
-// aliasStore is a struct that has an underlying database and uses it to
-// allocate alias ShortChannelIDs. It only stores the last allocated alias. It
-// is also capable of storing the remote peer's alias SCIDs for
-// option_scid_alias channels.
+// aliasMgr is a struct that handles aliases for LND. It has an underlying
+// database that can allocate aliases for channels, stores the peer's last
+// alias for use in our hop hints, and contains mappings that both the Switch
+// and Gossiper use.
 type aliasMgr struct {
 	backend kvdb.Backend
 
@@ -313,6 +317,10 @@ func (s *aliasMgr) getPeerAlias(chanID lnwire.ChannelID) (
 		return nil
 	}, func() {})
 
+	if alias == hop.Source {
+		return alias, errNoPeerAlias
+	}
+
 	return alias, err
 }
 
@@ -405,9 +413,9 @@ func getNextScid(last lnwire.ShortChannelID) lnwire.ShortChannelID {
 	return next
 }
 
-// IsAlias returns true if the passed SCID is an alias. The function determines
+// isAlias returns true if the passed SCID is an alias. The function determines
 // this by looking at the BlockHeight. If the BlockHeight is greater than 10000
 // and less than 2^18, then it is an alias assigned by requestAlias.
-func IsAlias(scid lnwire.ShortChannelID) bool {
+func isAlias(scid lnwire.ShortChannelID) bool {
 	return scid.BlockHeight >= 10000 && scid.BlockHeight < 1<<18
 }

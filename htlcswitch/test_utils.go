@@ -1133,6 +1133,12 @@ func (h *hopNetwork) createChannelLink(server, peer *mockServer,
 		return nil
 	}
 
+	getAliases := func(base lnwire.ShortChannelID) (
+		[]lnwire.ShortChannelID, error) {
+
+		return nil, nil
+	}
+
 	link := NewChannelLink(
 		ChannelLinkConfig{
 			Switch:             server.htlcSwitch,
@@ -1171,6 +1177,7 @@ func (h *hopNetwork) createChannelLink(server, peer *mockServer,
 			NotifyActiveChannel:     func(wire.OutPoint) {},
 			NotifyInactiveChannel:   func(wire.OutPoint) {},
 			HtlcNotifier:            server.htlcSwitch.cfg.HtlcNotifier,
+			GetAliases:              getAliases,
 		},
 		channel,
 	)

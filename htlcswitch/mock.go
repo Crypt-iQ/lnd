@@ -34,6 +34,10 @@ import (
 	"github.com/lightningnetwork/lnd/ticker"
 )
 
+func isAlias(scid lnwire.ShortChannelID) bool {
+	return scid.BlockHeight >= 10000 && scid.BlockHeight < 1<<18
+}
+
 type mockPreimageCache struct {
 	sync.Mutex
 	preimageMap map[lntypes.Hash]lntypes.Preimage
@@ -209,6 +213,7 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		HTLCExpiry:      time.Hour,
 		DustThreshold:   DefaultDustThreshold,
 		SignAliasUpdate: signAliasUpdate,
+		IsAlias:         isAlias,
 	}
 
 	return New(cfg, startingHeight)
@@ -664,6 +669,11 @@ type mockChannelLink struct {
 
 	shortChanID lnwire.ShortChannelID
 
+	// Only used for zero-conf channels.
+	realScid lnwire.ShortChannelID
+
+	aliases []lnwire.ShortChannelID
+
 	chanID lnwire.ChannelID
 
 	peer lnpeer.Peer
@@ -676,6 +686,10 @@ type mockChannelLink struct {
 
 	private bool
 
+	zeroConf bool
+
+	isOption bool
+
 	htlcID uint64
 
 	checkHtlcTransitResult *LinkError
@@ -684,6 +698,8 @@ type mockChannelLink struct {
 
 	failAliasUpdate func(sid lnwire.ShortChannelID,
 		incoming bool) *lnwire.ChannelUpdate
+
+	confirmedZC bool
 }
 
 // completeCircuit is a helper method for adding the finalized payment circuit
@@ -721,19 +737,39 @@ func (f *mockChannelLink) deleteCircuit(pkt *htlcPacket) error {
 }
 
 func newMockChannelLink(htlcSwitch *Switch, chanID lnwire.ChannelID,
-	shortChanID, otherShortChanID lnwire.ShortChannelID, peer lnpeer.Peer,
-	eligible, private bool,
+	shortChanID, realScid lnwire.ShortChannelID, peer lnpeer.Peer,
+	eligible, private, zeroConf, isOption bool,
 ) *mockChannelLink {
 
-	return &mockChannelLink{
-		htlcSwitch:       htlcSwitch,
-		chanID:           chanID,
-		shortChanID:      shortChanID,
-		otherShortChanID: otherShortChanID,
-		peer:             peer,
-		eligible:         eligible,
-		private:          private,
+	aliases := make([]lnwire.ShortChannelID, 0)
+	var realConfirmed bool
+
+	if zeroConf {
+		aliases = append(aliases, shortChanID)
 	}
+
+	if realScid != hop.Source {
+		realConfirmed = true
+	}
+
+	return &mockChannelLink{
+		htlcSwitch:  htlcSwitch,
+		chanID:      chanID,
+		shortChanID: shortChanID,
+		realScid:    realScid,
+		peer:        peer,
+		eligible:    eligible,
+		private:     private,
+		zeroConf:    zeroConf,
+		isOption:    isOption,
+		aliases:     aliases,
+		confirmedZC: realConfirmed,
+	}
+}
+
+// addAlias is not part of any interface method.
+func (f *mockChannelLink) addAlias(alias lnwire.ShortChannelID) {
+	f.aliases = append(f.aliases, alias)
 }
 
 func (f *mockChannelLink) handleSwitchPacket(pkt *htlcPacket) error {
@@ -790,10 +826,30 @@ func (f *mockChannelLink) AttachMailBox(mailBox MailBox) {
 	mailBox.SetDustClosure(f.getDustClosure())
 }
 
-func (f *mockChannelLink) AttachFailAliasUpdate(closure func(
+func (f *mockChannelLink) attachFailAliasUpdate(closure func(
 	sid lnwire.ShortChannelID, incoming bool) *lnwire.ChannelUpdate) {
 
 	f.failAliasUpdate = closure
+}
+
+func (f *mockChannelLink) getAliases() ([]lnwire.ShortChannelID, error) {
+	return f.aliases, nil
+}
+
+func (f *mockChannelLink) isZeroConf() bool {
+	return f.zeroConf
+}
+
+func (f *mockChannelLink) isOptionScidAlias() bool {
+	return f.isOption
+}
+
+func (f *mockChannelLink) confirmedScid() lnwire.ShortChannelID {
+	return f.realScid
+}
+
+func (f *mockChannelLink) zeroConfConfirmed() bool {
+	return f.confirmedZC
 }
 
 func (f *mockChannelLink) Start() error {
@@ -816,9 +872,6 @@ func (f *mockChannelLink) IsPrivate() bool                              { return
 func (f *mockChannelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 	f.eligible = true
 	return f.shortChanID, nil
-}
-func (f *mockChannelLink) OtherShortChanID() lnwire.ShortChannelID {
-	return f.otherShortChanID
 }
 
 var _ ChannelLink = (*mockChannelLink)(nil)

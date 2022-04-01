@@ -829,8 +829,27 @@ func (s *Switch) getLocalLink(pkt *htlcPacket, htlc *lnwire.UpdateAddHTLC) (
 	link, err := s.getLinkByShortID(pkt.outgoingChanID)
 	defer s.indexMtx.RUnlock()
 	if err != nil {
-		log.Errorf("Link %v not found", pkt.outgoingChanID)
-		return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		// If the link was not found for the outgoingChanID, an outside
+		// subsystem may be using the confirmed SCID of a zero-conf
+		// channel. In this case, we'll consult the Switch maps to see
+		// if an alias exists and use the alias to lookup the link.
+		// This extra step is a consequence of not updating the Switch
+		// forwardingIndex when a zero-conf channel is confirmed. We
+		// don't need to change the outgoingChanID since the link will
+		// do that upon receiving the packet.
+		baseScid, ok := s.baseIndex[pkt.outgoingChanID]
+		if !ok {
+			log.Errorf("Link %v not found", pkt.outgoingChanID)
+			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		}
+
+		// The base SCID was found, so we'll use that to fetch the
+		// link.
+		link, err = s.getLinkByShortID(baseScid)
+		if err != nil {
+			log.Errorf("Link %v not found", baseScid)
+			return nil, NewLinkError(&lnwire.FailUnknownNextPeer{})
+		}
 	}
 
 	if !link.EligibleToForward() {

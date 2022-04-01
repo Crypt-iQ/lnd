@@ -3533,7 +3533,7 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 		zeroConfVal = 1
 	}
 
-	zeroConfRecord := tlv.MakePrimitiveRecord(zeroConfType, zeroConfVal)
+	zeroConfRecord := tlv.MakePrimitiveRecord(zeroConfType, &zeroConfVal)
 
 	var optionScidVal uint8
 	if channel.OptionScidAlias {
@@ -3541,7 +3541,7 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 	}
 
 	optionScidRecord := tlv.MakePrimitiveRecord(
-		optionScidType, optionScidVal,
+		optionScidType, &optionScidVal,
 	)
 
 	var scidFeatureVal uint8
@@ -3550,7 +3550,7 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 	}
 
 	scidFeatureRecord := tlv.MakePrimitiveRecord(
-		scidFeatureType, scidFeatureVal,
+		scidFeatureType, &scidFeatureVal,
 	)
 
 	realScidRecord := MakeScidRecord(

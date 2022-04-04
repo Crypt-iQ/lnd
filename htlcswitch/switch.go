@@ -308,18 +308,19 @@ type Switch struct {
 	// make pipelining settles more efficient.
 	pendingSettleFails []channeldb.SettleFailRef
 
-	// aliasToReal is a map used for option-scid-alias and zero-conf links.
+	// aliasToReal is a map used for option-scid-alias feature-bit links.
 	// The alias SCID is the key and the real, confirmed SCID is the value.
 	// If the channel is unconfirmed, there will not be a mapping for it.
 	// Since channels can have multiple aliases, this map is essentially a
 	// N->1 mapping for a channel. This MUST be accessed with the indexMtx.
 	aliasToReal map[lnwire.ShortChannelID]lnwire.ShortChannelID
 
-	// baseIndex is a map used for option-scid-alias and zero-conf links.
+	// baseIndex is a map used for option-scid-alias feature-bit links.
 	// The value is the SCID of the link's ShortChannelID. This value may
 	// be an alias for zero-conf channels or a confirmed SCID for
-	// option-scid-alias channels. The key includes the value itself and
-	// also any other aliases. This MUST be accessed with the indexMtx.
+	// non-zero-conf channels with the option-scid-alias feature-bit. The
+	// key includes the value itself and also any other aliases. This MUST
+	// be accessed with the indexMtx.
 	baseIndex map[lnwire.ShortChannelID]lnwire.ShortChannelID
 }
 
@@ -1085,9 +1086,10 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		// same incoming and outgoing channel. If our node does not
 		// allow forwards of this nature, we fail the htlc early. This
 		// check is in place to disallow inefficiently routed htlcs from
-		// locking up our balance. With option-scid-alias or zero-conf
-		// channels, we have to be sure that the IDs aren't the same
-		// since one or both could be an alias.
+		// locking up our balance. With channels where the
+		// option-scid-alias feature was negotiated, we also have to be
+		// sure that the IDs aren't the same since one or both could be
+		// an alias.
 		linkErr := s.checkCircularForward(
 			packet.incomingChanID, packet.outgoingChanID,
 			s.cfg.AllowCircularRoute, htlc.PaymentHash,
@@ -1354,8 +1356,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 func (s *Switch) checkCircularForward(incoming, outgoing lnwire.ShortChannelID,
 	allowCircular bool, paymentHash lntypes.Hash) *LinkError {
 
-	// If they are equal, we can skip the option-scid-alias/zero-conf
-	// mapping checks.
+	// If they are equal, we can skip the alias mapping checks.
 	if incoming == outgoing {
 		// The switch may be configured to allow circular routes, so
 		// just log and return nil.
@@ -2239,23 +2240,21 @@ func (s *Switch) addLiveLink(link ChannelLink) {
 		// Now we populate the baseIndex which will be used to fetch
 		// the link given any of the channel's alias SCIDs or the real
 		// SCID. The link's SCID is an alias, so we don't need to
-		// special-case it like the option-scid-alias case further
-		// down.
+		// special-case it like the option-scid-alias feature-bit case
+		// further down.
 		for _, alias := range aliases {
 			s.baseIndex[alias] = linkScid
 		}
-	}
-
-	if link.isOptionScidAlias() {
-		// The link's SCID is the confirmed SCID for any non-zero-conf
-		// channel.
+	} else if link.negotiatedAliasFeature() {
+		// The link's SCID is the confirmed SCID for non-zero-conf
+		// option-scid-alias feature bit channels.
 		for _, alias := range aliases {
 			s.aliasToReal[alias] = linkScid
 			s.baseIndex[alias] = linkScid
 		}
 
 		// Since the link's SCID is confirmed, it was not included in
-		// the baseIndex above as a key. We'll add it now.
+		// the baseIndex above as a key. Add it now.
 		s.baseIndex[linkScid] = linkScid
 	}
 }
@@ -2332,8 +2331,9 @@ func (s *Switch) getLinkByShortID(chanID lnwire.ShortChannelID) (ChannelLink, er
 // public or not.
 //
 // * If the outgoingChanID is a confirmed SCID, we'll need to do more checks.
-//   - If there is no entry found in baseIndex, fetch the link. This is not an
-//     option-scid-alias or zero-conf channel.
+//   - If there is no entry found in baseIndex, fetch the link. This channel
+//     did not have the option-scid-alias feature negotiated (which includes
+//     zero-conf and option-scid-alias channel-types).
 //   - If there is an entry found, fetch the link from forwardingIndex and
 //     fail if this is a private link.
 //
@@ -2344,7 +2344,7 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	aliasID := s.cfg.IsAlias(chanID)
 
 	// Set the originalOutgoingChanID so the proper channel_update can be
-	// sent back for option_scid_alias or zero-conf channels.
+	// sent back if the option-scid-alias feature bit was negotiated.
 	pkt.originalOutgoingChanID = chanID
 
 	if aliasID {
@@ -2376,9 +2376,9 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	// SCID from baseIndex.
 	baseScid, ok := s.baseIndex[chanID]
 	if !ok {
-		// outgoingChanID is not a key in base index meaning this is
-		// not an option-scid-alias or zero-conf channel. We'll fetch
-		// the link and return it.
+		// outgoingChanID is not a key in base index meaning this
+		// channel did not have the option-scid-alias feature bit
+		// negotiated. We'll fetch the link and return it.
 		link, ok := s.forwardingIndex[chanID]
 		if !ok {
 			// The link wasn't found, bail out.
@@ -2396,8 +2396,8 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	}
 
 	// If the link is private, we fail since the real SCID was used to
-	// forward over it and this is an option-scid-alias or zero-conf
-	// channel.
+	// forward over it and this is a channel where the option-scid-alias
+	// feature bit was negotiated.
 	if link.IsPrivate() {
 		return nil, ErrChannelLinkNotFound
 	}
@@ -2469,7 +2469,7 @@ func (s *Switch) removeLink(chanID lnwire.ChannelID) ChannelLink {
 
 // UpdateShortChanID locates the link with the passed-in chanID and updates the
 // underlying channel state. This is only used in zero-conf channels to allow
-// the OtherShortChannelID to be updated.
+// the confirmed SCID to be updated.
 func (s *Switch) UpdateShortChanID(chanID lnwire.ChannelID) error {
 	s.indexMtx.Lock()
 	defer s.indexMtx.Unlock()
@@ -2672,10 +2672,10 @@ func (s *Switch) evaluateDustThreshold(link ChannelLink,
 }
 
 // failAliasUpdate prepares a ChannelUpdate for a failed incoming or outgoing
-// HTLC on an option-scid-alias or zero-conf channel. If the associated channel
-// is not one of these, this function will return nil and the caller is
-// expected to handle this properly. In this case, a return to the original
-// non-alias behavior is expected.
+// HTLC on a channel where the option-scid-alias feature bit was negotiated. If
+// the associated channel is not one of these, this function will return nil
+// and the caller is expected to handle this properly. In this case, a return
+// to the original non-alias behavior is expected.
 func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
 	incoming bool) *lnwire.ChannelUpdate {
 
@@ -2783,10 +2783,11 @@ func (s *Switch) failAliasUpdate(scid lnwire.ShortChannelID,
 
 	// The incoming case will replace the ShortChannelID in the retrieved
 	// ChannelUpdate with the alias to ensure no privacy leak occurs. This
-	// would happen if a private option-scid-alias channel w/o zero-conf
-	// leaked its UTXO here rather than supplying an alias. In the outgoing
-	// case, the confirmed SCID was actually used for forwarding in the
-	// onion, so no replacement is necessary as the sender knows the scid.
+	// would happen if a private non-zero-conf option-scid-alias
+	// feature-bit channel leaked its UTXO here rather than supplying an
+	// alias. In the outgoing case, the confirmed SCID was actually used
+	// for forwarding in the onion, so no replacement is necessary as the
+	// sender knows the scid.
 	if incoming {
 		// We will replace and sign the update with the first alias.
 		// Since this happens on the incoming side, it's not actually
@@ -2820,10 +2821,9 @@ func (s *Switch) AddAliasForLink(chanID lnwire.ChannelID,
 		return err
 	}
 
-	// If the link is not an option-scid-alias or zero-conf channel, we'll
-	// return an error.
-	if !link.isZeroConf() && !link.isOptionScidAlias() {
-		// TODO: actual error message?
+	// If the link is a channel where the option-scid-alias feature bit was
+	// not negotiated, we'll return an error.
+	if !link.negotiatedAliasFeature() {
 		return fmt.Errorf("attempted to update non-alias channel")
 	}
 
@@ -2842,10 +2842,8 @@ func (s *Switch) AddAliasForLink(chanID lnwire.ChannelID,
 
 		// Add this alias to the baseIndex mapping.
 		s.baseIndex[alias] = linkScid
-	}
-
-	if link.isOptionScidAlias() {
-		// The channel has confirmed, so we'll populate the aliasToReal
+	} else if link.negotiatedAliasFeature() {
+		// The channel is confirmed, so we'll populate the aliasToReal
 		// and baseIndex maps.
 		s.aliasToReal[alias] = linkScid
 		s.baseIndex[alias] = linkScid

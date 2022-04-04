@@ -30,8 +30,9 @@ type ProtocolOptions struct {
 	// type for leased channel.
 	NoScriptEnforcedLease bool `long:"no-script-enforced-lease" description:"disable support for script enforced lease commitments"`
 
-	// OptionScidAlias should be set if we accept zero-conf and
-	// option-scid-alias channels.
+	// OptionScidAlias should be set if we want to signal the
+	// option-scid-alias feature bit. This allows scid aliases, zero-conf
+	// channel-types, and option-scid-alias channel-types.
 	OptionScidAlias bool `long:"option-scid-alias" description:"enable support for option_scid_alias and zero-conf channels"`
 }
 

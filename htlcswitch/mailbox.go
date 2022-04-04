@@ -109,7 +109,7 @@ type mailBoxConfig struct {
 	expiry time.Duration
 
 	// failAliasUpdate is a function used to fail an HTLC for an
-	// option-scid-alias channel.
+	// option-scid-alias feature-bit channel.
 	failAliasUpdate func(sid lnwire.ShortChannelID,
 		incoming bool) *lnwire.ChannelUpdate
 }
@@ -718,8 +718,8 @@ func (m *memoryMailBox) FailAdd(pkt *htlcPacket) {
 	var failure lnwire.FailureMessage
 
 	// Try to use the failAliasUpdate function in case this is an
-	// option-scid-alias channel. If it's not, we'll fallback to the
-	// original non-alias behavior.
+	// option-scid-alias feature-bit channel. If it's not, we'll fallback
+	// to the original non-alias behavior.
 	update := m.cfg.failAliasUpdate(pkt.originalOutgoingChanID, false)
 	if update == nil {
 		// Execute the fallback behavior.
@@ -846,8 +846,8 @@ type mailOrchConfig struct {
 	expiry time.Duration
 
 	// failAliasUpdate is a function used to fail an HTLC for an
-	// option-scid-alias channel. This is passed to the individual memory
-	// mailboxes.
+	// option-scid-alias feature-bit channel. This is passed to the
+	// individual memory mailboxes.
 	failAliasUpdate func(sid lnwire.ShortChannelID,
 		incoming bool) *lnwire.ChannelUpdate
 }

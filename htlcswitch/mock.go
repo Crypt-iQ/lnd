@@ -688,7 +688,7 @@ type mockChannelLink struct {
 
 	zeroConf bool
 
-	isOption bool
+	optionFeature bool
 
 	htlcID uint64
 
@@ -738,7 +738,7 @@ func (f *mockChannelLink) deleteCircuit(pkt *htlcPacket) error {
 
 func newMockChannelLink(htlcSwitch *Switch, chanID lnwire.ChannelID,
 	shortChanID, realScid lnwire.ShortChannelID, peer lnpeer.Peer,
-	eligible, private, zeroConf, isOption bool,
+	eligible, private, zeroConf, optionFeature bool,
 ) *mockChannelLink {
 
 	aliases := make([]lnwire.ShortChannelID, 0)
@@ -753,17 +753,17 @@ func newMockChannelLink(htlcSwitch *Switch, chanID lnwire.ChannelID,
 	}
 
 	return &mockChannelLink{
-		htlcSwitch:  htlcSwitch,
-		chanID:      chanID,
-		shortChanID: shortChanID,
-		realScid:    realScid,
-		peer:        peer,
-		eligible:    eligible,
-		private:     private,
-		zeroConf:    zeroConf,
-		isOption:    isOption,
-		aliases:     aliases,
-		confirmedZC: realConfirmed,
+		htlcSwitch:    htlcSwitch,
+		chanID:        chanID,
+		shortChanID:   shortChanID,
+		realScid:      realScid,
+		peer:          peer,
+		eligible:      eligible,
+		private:       private,
+		zeroConf:      zeroConf,
+		optionFeature: optionFeature,
+		aliases:       aliases,
+		confirmedZC:   realConfirmed,
 	}
 }
 
@@ -840,8 +840,8 @@ func (f *mockChannelLink) isZeroConf() bool {
 	return f.zeroConf
 }
 
-func (f *mockChannelLink) isOptionScidAlias() bool {
-	return f.isOption
+func (f *mockChannelLink) negotiatedAliasFeature() bool {
+	return f.optionFeature
 }
 
 func (f *mockChannelLink) confirmedScid() lnwire.ShortChannelID {

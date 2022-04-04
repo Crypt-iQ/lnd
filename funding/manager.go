@@ -2750,14 +2750,12 @@ func (f *Manager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 	}
 	fundingLockedMsg := lnwire.NewFundingLocked(chanID, nextRevocation)
 
-	// For zero-conf and option-scid-alias channels, we'll send a TLV
-	// segment that includes an alias the peer can use in their invoice hop
-	// hints. We'll send the first alias we find for the channel since it
-	// does not matter which alias we send. We'll error out in the odd case
-	// that no aliases are found.
-	fmt.Println("send fl")
-	if completeChan.IsZeroConf() || completeChan.IsOptionScidAlias() {
-		fmt.Println("send fl here")
+	// If the channel negotiated the option-scid-alias feature bit, we'll
+	// send a TLV segment that includes an alias the peer can use in their
+	// invoice hop hints. We'll send the first alias we find for the
+	// channel since it does not matter which alias we send. We'll error
+	// out in the odd case that no aliases are found.
+	if completeChan.NegotiatedAliasFeature() {
 		aliases, err := f.cfg.GetAliases(completeChan.ShortChanID())
 		if err != nil {
 			return fmt.Errorf("unable to fetch aliases: %v", err)
@@ -3105,9 +3103,9 @@ func (f *Manager) waitForZeroConfChannel(c *channeldb.OpenChannel,
 		}
 	}
 
-	// Since we have now marked down the OtherShortChannelID, we'll also
-	// need to tell the Switch to refresh the relevant ChannelLink so that
-	// forwards under the confirmed SCID are possible.
+	// Since we have now marked down the confirmed SCID, we'll also need to
+	// tell the Switch to refresh the relevant ChannelLink so that forwards
+	// under the confirmed SCID are possible if this is a public channel.
 	err = f.cfg.ReportShortChanID(c.FundingOutpoint)
 	if err != nil {
 		// This should only fail if the link is not found in the

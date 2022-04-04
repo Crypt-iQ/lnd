@@ -249,14 +249,14 @@ func TestSwitchForwardMapping(t *testing.T) {
 		zeroConf bool
 
 		// If this is true, then Alice's channel will be an
-		// option-scid-alias channel (channel type).
+		// option-scid-alias feature-bit, non-zero-conf channel.
 		optionScid bool
 
 		// If this is true, then an alias will be used for forwarding.
 		useAlias bool
 
 		// This is Alice's channel alias. This may not be set if this
-		// is not an option_scid_alias channel (channel type).
+		// is not an option_scid_alias channel (feature bit).
 		aliceAlias lnwire.ShortChannelID
 
 		// This is Alice's confirmed SCID. This may not be set if this
@@ -580,8 +580,8 @@ func testSwitchForwardMapping(t *testing.T, alicePrivate, aliceZeroConf,
 }
 
 // TestSwitchSendHTLCMapping tests that SendHTLC will properly route packets to
-// zero-conf or option-scid-alias channels if the confirmed SCID is used. It
-// also tests that nothing breaks with the mapping change.
+// zero-conf or option-scid-alias (feature-bit) channels if the confirmed SCID
+// is used. It also tests that nothing breaks with the mapping change.
 func TestSwitchSendHTLCMapping(t *testing.T) {
 	tests := []struct {
 		name string
@@ -589,9 +589,9 @@ func TestSwitchSendHTLCMapping(t *testing.T) {
 		// If this is true, the channel will be zero-conf.
 		zeroConf bool
 
-		// Denotes whether the channel is option-scid-alias channel
-		// type.
-		scidAlias bool
+		// Denotes whether the channel is option-scid-alias, non
+		// zero-conf feature bit.
+		optionFeature bool
 
 		// If this is true, then the alias will be used in the packet.
 		useAlias bool
@@ -603,10 +603,10 @@ func TestSwitchSendHTLCMapping(t *testing.T) {
 		real lnwire.ShortChannelID
 	}{
 		{
-			name:      "non-zero-conf real scid w/ option",
-			zeroConf:  false,
-			scidAlias: true,
-			useAlias:  false,
+			name:          "non-zero-conf real scid w/ option",
+			zeroConf:      false,
+			optionFeature: true,
+			useAlias:      false,
 			alias: lnwire.ShortChannelID{
 				BlockHeight: 10010,
 				TxIndex:     10,
@@ -678,14 +678,14 @@ func TestSwitchSendHTLCMapping(t *testing.T) {
 			t.Parallel()
 			testSwitchSendHtlcMapping(
 				t, test.zeroConf, test.useAlias, test.alias,
-				test.real, test.scidAlias,
+				test.real, test.optionFeature,
 			)
 		})
 	}
 }
 
 func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
-	real lnwire.ShortChannelID, scidAlias bool) {
+	real lnwire.ShortChannelID, optionFeature bool) {
 
 	peer, err := newMockServer(
 		t, "alice", testStartingHeight, nil, testDefaultDelta,
@@ -713,7 +713,7 @@ func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
 			true,
 		)
 
-		if scidAlias {
+		if optionFeature {
 			link.addAlias(alias)
 		}
 	}
@@ -742,8 +742,9 @@ func testSwitchSendHtlcMapping(t *testing.T, zeroConf, useAlias bool, alias,
 	require.NoError(t, err)
 }
 
-// TestSwitchUpdateScid verifies that zero-conf and option-scid-alias channel
-// types will have the expected entries in the aliasToReal and baseIndex maps.
+// TestSwitchUpdateScid verifies that zero-conf and non-zero-conf
+// option-scid-alias (feature bit) channels will have the expected entries in
+// the aliasToReal and baseIndex maps.
 func TestSwitchUpdateScid(t *testing.T) {
 	t.Parallel()
 
@@ -828,8 +829,8 @@ func TestSwitchUpdateScid(t *testing.T) {
 
 	s.indexMtx.RUnlock()
 
-	// Now we'll perform the same checks with an option-scid-alias channel
-	// type channel.
+	// Now we'll perform the same checks with a non-zero-conf
+	// option-scid-alias channel (feature-bit).
 	optionReal := lnwire.ShortChannelID{
 		BlockHeight: 600000,
 		TxIndex:     0,
@@ -4441,7 +4442,7 @@ func TestSwitchForwardFailAlias(t *testing.T) {
 		name string
 
 		// Whether or not Alice will be a zero-conf channel or an
-		// option-scid-alias channel (channel type).
+		// option-scid-alias channel (feature-bit).
 		zeroConf bool
 	}{
 		{
@@ -4490,7 +4491,7 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 	err = s.Start()
 	require.NoError(t, err)
 
-	// Make Alice's channel zero-conf or option-scid-alias (channel type).
+	// Make Alice's channel zero-conf or option-scid-alias (feature bit).
 	aliceAlias := lnwire.ShortChannelID{
 		BlockHeight: 10000,
 		TxIndex:     5,
@@ -4616,7 +4617,7 @@ func testSwitchForwardFailAlias(t *testing.T, zeroConf bool) {
 // switch rather than the mailbox because the mailbox tests do not have the
 // proper context (e.g. the Switch's failAliasUpdate function). The caveat here
 // is that if the private UTXO is already known, it is fine to send a failure
-// back. This tests option-scid-alias and zero-conf channels (channel type).
+// back. This tests option-scid-alias (feature-bit) and zero-conf channels.
 func TestSwitchAliasFailAdd(t *testing.T) {
 	tests := []struct {
 		name string
@@ -4714,7 +4715,7 @@ func testSwitchAliasFailAdd(t *testing.T, zeroConf, private, useAlias bool) {
 		_ = os.RemoveAll(tempPath)
 	}()
 
-	// Make Alice's channel zero-conf or option-scid-alias (channel type).
+	// Make Alice's channel zero-conf or option-scid-alias (feature bit).
 	aliceAlias := lnwire.ShortChannelID{
 		BlockHeight: 10000,
 		TxIndex:     5,
@@ -4810,8 +4811,8 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 		zeroConf bool
 
 		// Denotes whether or not the channel will have negotiated the
-		// option-scid-alias channel type.
-		scidAlias bool
+		// option-scid-alias feature-bit and is not zero-conf.
+		optionFeature bool
 
 		// Denotes whether or not the channel will be private.
 		private bool
@@ -4839,25 +4840,25 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 			useAlias: true,
 		},
 		{
-			name:      "public option-scid-alias using alias",
-			zeroConf:  false,
-			scidAlias: true,
-			private:   false,
-			useAlias:  true,
+			name:          "public option-scid-alias using alias",
+			zeroConf:      false,
+			optionFeature: true,
+			private:       false,
+			useAlias:      true,
 		},
 		{
-			name:      "public option-scid-alias using real",
-			zeroConf:  false,
-			scidAlias: true,
-			private:   false,
-			useAlias:  false,
+			name:          "public option-scid-alias using real",
+			zeroConf:      false,
+			optionFeature: true,
+			private:       false,
+			useAlias:      false,
 		},
 		{
-			name:      "private option-scid-alias using alias",
-			zeroConf:  false,
-			scidAlias: true,
-			private:   true,
-			useAlias:  true,
+			name:          "private option-scid-alias using alias",
+			zeroConf:      false,
+			optionFeature: true,
+			private:       true,
+			useAlias:      true,
 		},
 	}
 
@@ -4867,14 +4868,14 @@ func TestSwitchHandlePacketForward(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			testSwitchHandlePacketForward(
 				t, test.zeroConf, test.private, test.useAlias,
-				test.scidAlias,
+				test.optionFeature,
 			)
 		})
 	}
 }
 
 func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
-	useAlias, scidAlias bool) {
+	useAlias, optionFeature bool) {
 
 	t.Parallel()
 
@@ -4919,10 +4920,10 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 		aliceChannelState.ChannelFlags = lnwire.FFAnnounceChannel
 	}
 
-	// If this is an option-scid-alias channel, we'll mark the channel as
-	// such.
-	if scidAlias {
-		aliceChannelState.OptionScidAlias = true
+	// If this is an option-scid-alias feature-bit non-zero-conf channel,
+	// we'll mark the channel as such.
+	if optionFeature {
+		aliceChannelState.ScidAliasFeature = true
 	}
 
 	// This is the ShortChannelID field in the OpenChannel struct.
@@ -4998,14 +4999,14 @@ func testSwitchHandlePacketForward(t *testing.T, zeroConf, private,
 
 // TestSwitchAliasInterceptFail tests that when the InterceptableSwitch fails
 // an incoming HTLC, it does not leak the on-chain UTXO for option-scid-alias
-// or zero-conf channels (channel type).
+// (feature bit) or zero-conf channels.
 func TestSwitchAliasInterceptFail(t *testing.T) {
 	tests := []struct {
 		name string
 
 		// Denotes whether or not the incoming channel is a zero-conf
-		// channel or an option-scid-alias channel instead (channel
-		// type).
+		// channel or an option-scid-alias channel instead (feature
+		// bit).
 		zeroConf bool
 	}{
 		{

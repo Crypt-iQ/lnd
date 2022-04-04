@@ -82,6 +82,9 @@ func (c *testCtx) RestartRouter(t *testing.T) {
 		Control:            makeMockControlTower(),
 		ChannelPruneExpiry: time.Hour * 24,
 		GraphPruneInterval: time.Hour * 2,
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
+		},
 	})
 	require.NoError(t, err, "unable to create router")
 	require.NoError(t, router.Start(), "unable to start router")
@@ -165,6 +168,9 @@ func createTestCtxFromGraphInstanceAssumeValid(t *testing.T,
 		Clock:               clock.NewTestClock(time.Unix(1, 0)),
 		AssumeChannelValid:  assumeValid,
 		StrictZombiePruning: strictPruning,
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
+		},
 	})
 	require.NoError(t, err, "unable to create router")
 	require.NoError(t, router.Start(), "unable to start router")
@@ -1772,6 +1778,10 @@ func TestWakeUpOnStaleBranch(t *testing.T) {
 
 		// We'll set the delay to zero to prune immediately.
 		FirstTimePruneDelay: 0,
+
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
+		},
 	})
 	if err != nil {
 		t.Fatalf("unable to create router %v", err)
@@ -3573,6 +3583,10 @@ func TestSendMPPaymentSucceed(t *testing.T) {
 			next := atomic.AddUint64(&uniquePaymentID, 1)
 			return next, nil
 		},
+
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
+		},
 	})
 	require.NoError(t, err, "failed to create router")
 
@@ -3734,6 +3748,10 @@ func TestSendMPPaymentSucceedOnExtraShards(t *testing.T) {
 		NextPaymentID: func() (uint64, error) {
 			next := atomic.AddUint64(&uniquePaymentID, 1)
 			return next, nil
+		},
+
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
 		},
 	})
 	require.NoError(t, err, "failed to create router")
@@ -3942,6 +3960,10 @@ func TestSendMPPaymentFailed(t *testing.T) {
 			next := atomic.AddUint64(&uniquePaymentID, 1)
 			return next, nil
 		},
+
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
+		},
 	})
 	require.NoError(t, err, "failed to create router")
 
@@ -4141,6 +4163,10 @@ func TestSendMPPaymentFailedWithShardsInFlight(t *testing.T) {
 		NextPaymentID: func() (uint64, error) {
 			next := atomic.AddUint64(&uniquePaymentID, 1)
 			return next, nil
+		},
+
+		IsAlias: func(scid lnwire.ShortChannelID) bool {
+			return false
 		},
 	})
 	require.NoError(t, err, "failed to create router")

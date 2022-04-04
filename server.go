@@ -962,6 +962,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		IsAlias:                 isAlias,
 		SignAliasUpdate:         s.signAliasUpdate,
 		FindBaseByAlias:         s.aliasMgr.findBaseSCID,
+		GetAlias:                s.aliasMgr.getPeerAlias,
 	}, nodeKeyDesc)
 
 	s.localChanMgr = &localchans.Manager{
@@ -4315,8 +4316,26 @@ func (s *server) fetchLastChanUpdate() func(lnwire.ShortChannelID) (
 
 // applyChannelUpdate applies the channel update to the different sub-systems of
 // the server.
-func (s *server) applyChannelUpdate(update *lnwire.ChannelUpdate) error {
-	errChan := s.authGossiper.ProcessLocalAnnouncement(update)
+func (s *server) applyChannelUpdate(update *lnwire.ChannelUpdate,
+	op *wire.OutPoint) error {
+
+	var (
+		peerAlias    *lnwire.ShortChannelID
+		defaultAlias lnwire.ShortChannelID
+	)
+
+	chanID := lnwire.NewChanIDFromOutPoint(op)
+
+	// Fetch the peer's alias from the lnwire.ChannelID so it can be used
+	// in the ChannelUpdate if it hasn't been announced yet.
+	foundAlias, _ := s.aliasMgr.getPeerAlias(chanID)
+	if foundAlias != defaultAlias {
+		peerAlias = &foundAlias
+	}
+
+	errChan := s.authGossiper.ProcessLocalAnnouncement(
+		update, discovery.RemoteAlias(peerAlias),
+	)
 	select {
 	case err := <-errChan:
 		return err

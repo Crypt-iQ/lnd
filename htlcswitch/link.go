@@ -755,12 +755,13 @@ func (l *channelLink) syncChanStates() error {
 				l.ChanID(), nextRevocation,
 			)
 
-			// For option-scid-alias or zero-conf channels, ensure
-			// that we send over the alias in the funding_locked
-			// message. We'll send the first alias we find for the
-			// channel since it does not matter which alias we
-			// send. We'll error out if no aliases are found.
-			if l.isZeroConf() || l.isOptionScidAlias() {
+			// For channels that negotiated the option-scid-alias
+			// feature bit, ensure that we send over the alias in
+			// the funding_locked message. We'll send the first
+			// alias we find for the channel since it does not
+			// matter which alias we send. We'll error out if no
+			// aliases are found.
+			if l.negotiatedAliasFeature() {
 				aliases, err := l.getAliases()
 				if err != nil {
 					return err
@@ -2381,12 +2382,14 @@ func (l *channelLink) isZeroConf() bool {
 	return l.channel.State().IsZeroConf()
 }
 
-// isOptionScidAlias returns whether or not the underlying channel is a
-// option-scid-alias channel.
+// negotiatedAliasFeature returns whether or not the underlying channel has
+// negotiated the option-scid-alias feature bit. This will be true for both
+// option-scid-alias and zero-conf channel-types. It will also be true for
+// channels with the feature bit but without the above channel-types.
 //
-// Part of the scidAliasHandler interface.
-func (l *channelLink) isOptionScidAlias() bool {
-	return l.channel.State().IsOptionScidAlias()
+// Part of the scidAliasFeature interface.
+func (l *channelLink) negotiatedAliasFeature() bool {
+	return l.channel.State().NegotiatedAliasFeature()
 }
 
 // getAliases returns the set of aliases for the underlying channel, erroring

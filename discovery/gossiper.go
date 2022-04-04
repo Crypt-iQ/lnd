@@ -306,6 +306,11 @@ type Config struct {
 	// feature bit.
 	FindBaseByAlias func(alias lnwire.ShortChannelID) (
 		lnwire.ShortChannelID, error)
+
+	// GetAlias allows the gossiper to look up the peer's alias for a given
+	// ChannelID. This is used to sign updates for them if the channel has
+	// no AuthProof and the option-scid-alias feature bit was negotiated.
+	GetAlias func(lnwire.ChannelID) (lnwire.ShortChannelID, error)
 }
 
 // cachedNetworkMsg is a wrapper around a network message that can be used with
@@ -1552,6 +1557,37 @@ func (d *AuthenticatedGossiper) processChanPolicyUpdate(
 		// avoid directly giving away their existence. Instead, we'll
 		// send the update directly to the remote party.
 		if edgeInfo.Info.AuthProof == nil {
+			// If AuthProof is nil and an alias was found for this
+			// ChannelID (meaning the option-scid-alias feature was
+			// negotiated), we'll replace the ShortChannelID in the
+			// update with the peer's alias. We do this after
+			// updateChannel so that the alias isn't persisted to
+			// the database.
+			op := &edgeInfo.Info.ChannelPoint
+			chanID := lnwire.NewChanIDFromOutPoint(op)
+
+			var defaultAlias lnwire.ShortChannelID
+			foundAlias, _ := d.cfg.GetAlias(chanID)
+			if foundAlias != defaultAlias {
+				chanUpdate.ShortChannelID = foundAlias
+
+				sig, err := d.cfg.SignAliasUpdate(chanUpdate)
+				if err != nil {
+					log.Errorf("Unable to sign alias "+
+						"update: %v", err)
+					continue
+				}
+
+				lnSig, err := lnwire.NewSigFromSignature(sig)
+				if err != nil {
+					log.Errorf("Unable to create sig: %v",
+						err)
+					continue
+				}
+
+				chanUpdate.Signature = lnSig
+			}
+
 			remotePubKey := remotePubFromChanInfo(
 				edgeInfo.Info, chanUpdate.ChannelFlags,
 			)
@@ -2423,10 +2459,6 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		return nil, false
 	}
 
-	// Even if this is one of our channel's with a peer and we've
-	// negotiated the option-scid-alias feature bit, it's ok to use the
-	// alias block height. This is because the aliases we use are all under
-	// the segwit block height and the isPremature check doesn't matter.
 	blockHeight := upd.ShortChannelID.BlockHeight
 	shortChanID := upd.ShortChannelID.ToUint64()
 
@@ -2464,9 +2496,6 @@ func (d *AuthenticatedGossiper) handleChanUpdate(nMsg *networkMsg,
 		// Once public option-scid-alias channels have 6 confs, we'll
 		// ignore ChannelUpdates with one of their aliases.
 		graphScid = upd.ShortChannelID
-		fmt.Printf("didnt find base by alias: %v", graphScid)
-	} else {
-		fmt.Printf("found base by alias: %v", graphScid)
 	}
 
 	if d.cfg.Router.IsStaleEdgePolicy(

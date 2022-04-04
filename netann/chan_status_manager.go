@@ -60,7 +60,7 @@ type ChanStatusConfig struct {
 	// ApplyChannelUpdate processes new ChannelUpdates signed by our node by
 	// updating our local routing table and broadcasting the update to our
 	// peers.
-	ApplyChannelUpdate func(*lnwire.ChannelUpdate) error
+	ApplyChannelUpdate func(*lnwire.ChannelUpdate, *wire.OutPoint) error
 
 	// DB stores the set of channels that are to be monitored.
 	DB DB
@@ -634,7 +634,7 @@ func (m *ChanStatusManager) signAndSendNextUpdate(outpoint wire.OutPoint,
 		return err
 	}
 
-	return m.cfg.ApplyChannelUpdate(chanUpdate)
+	return m.cfg.ApplyChannelUpdate(chanUpdate, &outpoint)
 }
 
 // fetchLastChanUpdateByOutPoint fetches the latest policy for our direction of

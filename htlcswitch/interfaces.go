@@ -91,9 +91,9 @@ type scidAliasHandler interface {
 	// zero-conf channel.
 	isZeroConf() bool
 
-	// isOptionScidAlias returns whether or not the underlying channel is a
-	// option-scid-alias channel.
-	isOptionScidAlias() bool
+	// negotiatedAliasFeature returns whether the option-scid-alias feature
+	// bit was negotiated.
+	negotiatedAliasFeature() bool
 
 	// confirmedScid returns the confirmed SCID for a zero-conf channel.
 	confirmedScid() lnwire.ShortChannelID

@@ -788,11 +788,17 @@ func testCancelNonExistentReservation(miner *rpctest.Harness,
 		t.Fatalf("unable to query fee estimator: %v", err)
 	}
 
+	req := &lnwallet.InitFundingReserveMsg{
+		CommitFeePerKw: feePerKw,
+		PushMSat:       10,
+		Flags:          lnwire.FFAnnounceChannel,
+		CommitType:     lnwallet.CommitmentTypeTweakless,
+		PendingChanID:  [32]byte{},
+	}
+
 	// Create our own reservation, give it some ID.
 	res, err := lnwallet.NewChannelReservation(
-		10000, 10000, feePerKw, alice, 22, 10, &testHdSeed,
-		lnwire.FFAnnounceChannel, lnwallet.CommitmentTypeTweakless,
-		nil, [32]byte{}, 0,
+		10000, 10000, alice, 22, &testHdSeed, 0, req,
 	)
 	if err != nil {
 		t.Fatalf("unable to create res: %v", err)

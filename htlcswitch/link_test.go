@@ -1936,6 +1936,12 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		return nil
 	}
 
+	getAliases := func(
+		base lnwire.ShortChannelID) []lnwire.ShortChannelID {
+
+		return nil
+	}
+
 	// Instantiate with a long interval, so that we can precisely control
 	// the firing via force feeding.
 	bticker := ticker.NewForce(time.Hour)
@@ -1979,6 +1985,7 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		NotifyActiveChannel:   func(wire.OutPoint) {},
 		NotifyInactiveChannel: func(wire.OutPoint) {},
 		HtlcNotifier:          aliceSwitch.cfg.HtlcNotifier,
+		GetAliases:            getAliases,
 	}
 
 	aliceLink := NewChannelLink(aliceCfg, aliceLc.channel)
@@ -4489,6 +4496,12 @@ func (h *persistentLinkHarness) restartLink(
 		return nil
 	}
 
+	getAliases := func(
+		base lnwire.ShortChannelID) []lnwire.ShortChannelID {
+
+		return nil
+	}
+
 	// Instantiate with a long interval, so that we can precisely control
 	// the firing via force feeding.
 	bticker := ticker.NewForce(time.Hour)
@@ -4535,6 +4548,7 @@ func (h *persistentLinkHarness) restartLink(
 		NotifyInactiveChannel: func(wire.OutPoint) {},
 		HtlcNotifier:          aliceSwitch.cfg.HtlcNotifier,
 		SyncStates:            syncStates,
+		GetAliases:            getAliases,
 	}
 
 	aliceLink := NewChannelLink(aliceCfg, aliceChannel)
@@ -5769,6 +5783,12 @@ func TestCheckHtlcForward(t *testing.T) {
 		return &lnwire.ChannelUpdate{}, nil
 	}
 
+	failAliasUpdate := func(sid lnwire.ShortChannelID,
+		incoming bool) *lnwire.ChannelUpdate {
+
+		return nil
+	}
+
 	testChannel, _, fCleanUp, err := createTestChannel(
 		alicePrivKey, bobPrivKey, 100000, 100000,
 		1000, 1000, lnwire.ShortChannelID{},
@@ -5794,11 +5814,13 @@ func TestCheckHtlcForward(t *testing.T) {
 		channel: testChannel.channel,
 	}
 
+	link.attachFailAliasUpdate(failAliasUpdate)
+
 	var hash [32]byte
 
 	t.Run("satisfied", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 1500, 1000,
-			200, 150, 0)
+			200, 150, 0, lnwire.ShortChannelID{})
 		if result != nil {
 			t.Fatalf("expected policy to be satisfied")
 		}
@@ -5806,7 +5828,7 @@ func TestCheckHtlcForward(t *testing.T) {
 
 	t.Run("below minhtlc", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 100, 50,
-			200, 150, 0)
+			200, 150, 0, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailAmountBelowMinimum); !ok {
 			t.Fatalf("expected FailAmountBelowMinimum failure code")
 		}
@@ -5814,7 +5836,7 @@ func TestCheckHtlcForward(t *testing.T) {
 
 	t.Run("above maxhtlc", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 1500, 1200,
-			200, 150, 0)
+			200, 150, 0, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailTemporaryChannelFailure); !ok {
 			t.Fatalf("expected FailTemporaryChannelFailure failure code")
 		}
@@ -5822,7 +5844,7 @@ func TestCheckHtlcForward(t *testing.T) {
 
 	t.Run("insufficient fee", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 1005, 1000,
-			200, 150, 0)
+			200, 150, 0, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailFeeInsufficient); !ok {
 			t.Fatalf("expected FailFeeInsufficient failure code")
 		}
@@ -5830,7 +5852,7 @@ func TestCheckHtlcForward(t *testing.T) {
 
 	t.Run("expiry too soon", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 1500, 1000,
-			200, 150, 190)
+			200, 150, 190, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailExpiryTooSoon); !ok {
 			t.Fatalf("expected FailExpiryTooSoon failure code")
 		}
@@ -5838,7 +5860,7 @@ func TestCheckHtlcForward(t *testing.T) {
 
 	t.Run("incorrect cltv expiry", func(t *testing.T) {
 		result := link.CheckHtlcForward(hash, 1500, 1000,
-			200, 190, 0)
+			200, 190, 0, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailIncorrectCltvExpiry); !ok {
 			t.Fatalf("expected FailIncorrectCltvExpiry failure code")
 		}
@@ -5848,7 +5870,7 @@ func TestCheckHtlcForward(t *testing.T) {
 	t.Run("cltv expiry too far in the future", func(t *testing.T) {
 		// Check that expiry isn't too far in the future.
 		result := link.CheckHtlcForward(hash, 1500, 1000,
-			10200, 10100, 0)
+			10200, 10100, 0, lnwire.ShortChannelID{})
 		if _, ok := result.WireMessage().(*lnwire.FailExpiryTooFar); !ok {
 			t.Fatalf("expected FailExpiryTooFar failure code")
 		}

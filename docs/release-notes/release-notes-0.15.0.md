@@ -15,6 +15,11 @@ invoices](https://lists.linuxfoundation.org/pipermail/lightning-dev/2021-Septemb
 
 * [Misconfigured ZMQ
   setup now logs a warning](https://github.com/lightningnetwork/lnd/pull/5710).
+  
+## Protocol Extensions
+
+### Zero-Conf Channel Opens
+* [Introduces support for zero-conf channel opens and non-zero-conf option_scid_alias channels.](https://github.com/lightningnetwork/lnd/pull/5955)
 
 ## Taproot
 

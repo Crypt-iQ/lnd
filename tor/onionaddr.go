@@ -59,5 +59,5 @@ func (o *OnionAddr) String() string {
 // Network returns the network that this implementation of net.Addr will use.
 // In this case, because Tor only allows TCP connections, the network is "tcp".
 func (o *OnionAddr) Network() string {
-	return "tcp"
+	return "onion"
 }

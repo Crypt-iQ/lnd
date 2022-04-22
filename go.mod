@@ -4,7 +4,7 @@ require (
 	github.com/NebulousLabs/fastrand v0.0.0-20181203155948-6fb6489aac4e // indirect
 	github.com/NebulousLabs/go-upnp v0.0.0-20180202185039-29b680b06c82
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344
-	github.com/btcsuite/btcd v0.22.0-beta.0.20220330201728-074266215c26
+	github.com/btcsuite/btcd v0.22.0-beta.0.20220413172512-bf64c8bdbbbf
 	github.com/btcsuite/btcd/btcec/v2 v2.1.3
 	github.com/btcsuite/btcd/btcutil v1.1.1
 	github.com/btcsuite/btcd/btcutil/psbt v1.1.3
@@ -79,7 +79,10 @@ replace github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
 // There's a bug in Neutrino that causes our tests to fail. Downgrade to the
 // version just before the offending PR. Can remove again once
 // https://github.com/lightninglabs/neutrino/pull/247 is merged.
-replace github.com/lightninglabs/neutrino => github.com/lightninglabs/neutrino v0.13.2-0.20220209052920-0c79b771272b
+// replace github.com/lightninglabs/neutrino => github.com/lightninglabs/neutrino v0.13.2-0.20220209052920-0c79b771272b
+replace github.com/lightninglabs/neutrino => /Users/nsa/neutrino
+
+replace github.com/lightningnetwork/lnd/tor => /Users/nsa/lnd/tor
 
 // If you change this please also update .github/pull_request_template.md and
 // docs/INSTALL.md.

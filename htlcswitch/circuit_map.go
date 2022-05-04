@@ -725,6 +725,8 @@ func (cm *circuitMap) TrimOpenCircuits(chanID lnwire.ShortChannelID,
 	}
 	cm.mtx.Unlock()
 
+	log.Infof("Trimmed %v outkeys", len(trimmedOutKeys))
+
 	if len(trimmedOutKeys) == 0 {
 		return nil
 	}

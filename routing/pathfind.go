@@ -691,9 +691,12 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 		// If the probability is below the specified lower bound, we can
 		// abandon this direction. Adding further nodes can only lower
 		// the probability more.
-		if probability < cfg.MinProbability {
-			return
-		}
+
+		// uncomment so that a failure doesn't trigger pathfind failure for alice
+		// if probability < cfg.MinProbability {
+		// 	fmt.Printf("probabil < min: %v %v %v\n", probability, toNodeDist.probability, edgeProbability)
+		// return
+		// }
 
 		// By adding fromVertex in the route, there will be an extra
 		// weight composed of the fee that this node will charge and

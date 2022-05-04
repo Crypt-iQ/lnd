@@ -1791,6 +1791,11 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		}
 
 	case *lnwire.CommitSig:
+		if l.cfg.HodlMask.Active(hodl.Revoke) {
+			l.log.Warnf(hodl.Revoke.Warning())
+			return
+		}
+
 		// Since we may have learned new preimages for the first time,
 		// we'll add them to our preimage cache. By doing this, we
 		// ensure any contested contracts watched by any on-chain
@@ -2107,7 +2112,7 @@ func (l *channelLink) updateCommitTx() error {
 	theirCommitSig, htlcSigs, pendingHTLCs, err := l.channel.SignNextCommitment()
 	if err == lnwallet.ErrNoWindow {
 		l.cfg.PendingCommitTicker.Resume()
-		l.log.Trace("PendingCommitTicker resumed")
+		l.log.Debug("PendingCommitTicker resumed")
 
 		l.log.Tracef("revocation window exhausted, unable to send: "+
 			"%v, pend_updates=%v, dangling_closes%v",

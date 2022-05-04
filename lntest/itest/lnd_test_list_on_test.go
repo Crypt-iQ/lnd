@@ -403,4 +403,12 @@ var allTestCases = []*testCase{
 		name: "resolution handoff",
 		test: testResHandoff,
 	},
+	{
+		name: "onetrim",
+		test: testTrim,
+	},
+	{
+		name: "multitrim",
+		test: testMultiHopOnlyTrim,
+	},
 }

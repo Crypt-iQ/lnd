@@ -55,6 +55,9 @@ const (
 	// BogusSettle attempts to settle back any incoming HTLC for which we
 	// are the exit node with a bogus preimage.
 	BogusSettle
+
+	// Revoke drops any incoming commitments
+	Revoke
 )
 
 // String returns a human-readable identifier for a given Flag.
@@ -78,6 +81,8 @@ func (f Flag) String() string {
 		return "Commit"
 	case BogusSettle:
 		return "BogusSettle"
+	case Revoke:
+		return "Revoke"
 	default:
 		return "UnknownHodlFlag"
 	}
@@ -106,6 +111,8 @@ func (f Flag) Warning() string {
 		msg = "will not commit pending channel updates"
 	case BogusSettle:
 		msg = "will settle HTLC with bogus preimage"
+	case Revoke:
+		msg = "will drop incoming commitsig"
 	default:
 		msg = "incorrect hodl flag usage"
 	}

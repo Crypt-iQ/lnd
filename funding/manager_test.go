@@ -1318,6 +1318,14 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	// Check that the state machine is updated accordingly
 	assertFundingLockedSent(t, alice, bob, fundingOutPoint)
 
+	// Exchange the fundingLocked messages.
+	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
+	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
+
+	// Check that they notify the breach arbiter and peer about the new
+	// channel.
+	assertHandleFundingLocked(t, alice, bob)
+
 	// Make sure both fundingManagers send the expected channel
 	// announcements.
 	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
@@ -1328,14 +1336,6 @@ func TestFundingManagerNormalWorkflow(t *testing.T) {
 	// The funding transaction is now confirmed, wait for the
 	// OpenStatusUpdate_ChanOpen update
 	waitForOpenUpdate(t, updateChan)
-
-	// Exchange the fundingLocked messages.
-	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
-	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
-
-	// Check that they notify the breach arbiter and peer about the new
-	// channel.
-	assertHandleFundingLocked(t, alice, bob)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -1763,6 +1763,14 @@ func TestFundingManagerOfflinePeer(t *testing.T) {
 	// The state should now be fundingLockedSent
 	assertDatabaseState(t, alice, fundingOutPoint, fundingLockedSent)
 
+	// Exchange the fundingLocked messages.
+	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
+	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
+
+	// Check that they notify the breach arbiter and peer about the new
+	// channel.
+	assertHandleFundingLocked(t, alice, bob)
+
 	// Make sure both fundingManagers send the expected channel
 	// announcements.
 	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
@@ -1773,14 +1781,6 @@ func TestFundingManagerOfflinePeer(t *testing.T) {
 	// The funding transaction is now confirmed, wait for the
 	// OpenStatusUpdate_ChanOpen update
 	waitForOpenUpdate(t, updateChan)
-
-	// Exchange the fundingLocked messages.
-	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
-	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
-
-	// Check that they notify the breach arbiter and peer about the new
-	// channel.
-	assertHandleFundingLocked(t, alice, bob)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -2174,17 +2174,6 @@ func TestFundingManagerReceiveFundingLockedTwice(t *testing.T) {
 	// Check that the state machine is updated accordingly
 	assertFundingLockedSent(t, alice, bob, fundingOutPoint)
 
-	// Make sure both fundingManagers send the expected channel
-	// announcements.
-	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
-
-	// Check that the state machine is updated accordingly
-	assertAddedToRouterGraph(t, alice, bob, fundingOutPoint)
-
-	// The funding transaction is now confirmed, wait for the
-	// OpenStatusUpdate_ChanOpen update
-	waitForOpenUpdate(t, updateChan)
-
 	// Send the fundingLocked message twice to Alice, and once to Bob.
 	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
 	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
@@ -2212,6 +2201,17 @@ func TestFundingManagerReceiveFundingLockedTwice(t *testing.T) {
 	case <-time.After(time.Millisecond * 300):
 		// Expected
 	}
+
+	// Make sure both fundingManagers send the expected channel
+	// announcements.
+	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
+
+	// Check that the state machine is updated accordingly
+	assertAddedToRouterGraph(t, alice, bob, fundingOutPoint)
+
+	// The funding transaction is now confirmed, wait for the
+	// OpenStatusUpdate_ChanOpen update
+	waitForOpenUpdate(t, updateChan)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -2277,6 +2277,14 @@ func TestFundingManagerRestartAfterChanAnn(t *testing.T) {
 	// Check that the state machine is updated accordingly
 	assertFundingLockedSent(t, alice, bob, fundingOutPoint)
 
+	// Exchange the fundingLocked messages.
+	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
+	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
+
+	// Check that they notify the breach arbiter and peer about the new
+	// channel.
+	assertHandleFundingLocked(t, alice, bob)
+
 	// Make sure both fundingManagers send the expected channel
 	// announcements.
 	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
@@ -2292,14 +2300,6 @@ func TestFundingManagerRestartAfterChanAnn(t *testing.T) {
 	// the fundingLocked message. After restart, she will receive it, and
 	// we expect her to be able to handle it correctly.
 	recreateAliceFundingManager(t, alice)
-
-	// Exchange the fundingLocked messages.
-	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
-	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
-
-	// Check that they notify the breach arbiter and peer about the new
-	// channel.
-	assertHandleFundingLocked(t, alice, bob)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -2449,14 +2449,6 @@ func TestFundingManagerPrivateChannel(t *testing.T) {
 	// Check that the state machine is updated accordingly
 	assertFundingLockedSent(t, alice, bob, fundingOutPoint)
 
-	// Make sure both fundingManagers send the expected channel
-	// announcements.
-	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
-
-	// The funding transaction is now confirmed, wait for the
-	// OpenStatusUpdate_ChanOpen update
-	waitForOpenUpdate(t, updateChan)
-
 	// Exchange the fundingLocked messages.
 	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
 	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
@@ -2464,6 +2456,14 @@ func TestFundingManagerPrivateChannel(t *testing.T) {
 	// Check that they notify the breach arbiter and peer about the new
 	// channel.
 	assertHandleFundingLocked(t, alice, bob)
+
+	// Make sure both fundingManagers send the expected channel
+	// announcements.
+	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
+
+	// The funding transaction is now confirmed, wait for the
+	// OpenStatusUpdate_ChanOpen update
+	waitForOpenUpdate(t, updateChan)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -2562,6 +2562,14 @@ func TestFundingManagerPrivateRestart(t *testing.T) {
 	// Check that the state machine is updated accordingly
 	assertFundingLockedSent(t, alice, bob, fundingOutPoint)
 
+	// Exchange the fundingLocked messages.
+	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
+	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
+
+	// Check that they notify the breach arbiter and peer about the new
+	// channel.
+	assertHandleFundingLocked(t, alice, bob)
+
 	// Make sure both fundingManagers send the expected channel
 	// announcements.
 	assertChannelAnnouncements(t, alice, bob, capacity, nil, nil)
@@ -2574,14 +2582,6 @@ func TestFundingManagerPrivateRestart(t *testing.T) {
 	// The funding transaction is now confirmed, wait for the
 	// OpenStatusUpdate_ChanOpen update
 	waitForOpenUpdate(t, updateChan)
-
-	// Exchange the fundingLocked messages.
-	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
-	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
-
-	// Check that they notify the breach arbiter and peer about the new
-	// channel.
-	assertHandleFundingLocked(t, alice, bob)
 
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{
@@ -2914,14 +2914,22 @@ func TestFundingManagerCustomChannelParameters(t *testing.T) {
 
 	// After the funding transaction is mined, Alice will send
 	// fundingLocked to Bob.
-	_ = assertFundingMsgSent(
+	fundingLockedAlice := assertFundingMsgSent(
 		t, alice.msgChan, "FundingLocked",
 	).(*lnwire.FundingLocked)
 
 	// And similarly Bob will send funding locked to Alice.
-	_ = assertFundingMsgSent(
+	fundingLockedBob := assertFundingMsgSent(
 		t, bob.msgChan, "FundingLocked",
 	).(*lnwire.FundingLocked)
+
+	// Exchange the fundingLocked messages.
+	alice.fundingMgr.ProcessFundingMsg(fundingLockedBob, bob)
+	bob.fundingMgr.ProcessFundingMsg(fundingLockedAlice, alice)
+
+	// Check that they notify the breach arbiter and peer about the new
+	// channel.
+	assertHandleFundingLocked(t, alice, bob)
 
 	// Make sure both fundingManagers send the expected channel
 	// announcements.

@@ -1469,6 +1469,18 @@ message Channel {
 
     // List constraints for the remote node.
     ChannelConstraints remote_constraints = 30;
+
+    /*
+    This lists out the set of alias short channel ids that exist for a channel.
+    This may be empty.
+    */
+    repeated uint64 alias_scids = 31;
+
+    // Whether or not this is a zero-conf channel.
+    bool zero_conf = 32;
+
+    // If this is a zero-conf channel, whether or not it has reached 6 confs.
+    bool zero_conf_has_six_confs = 33;
 }
 
 message ListChannelsRequest {

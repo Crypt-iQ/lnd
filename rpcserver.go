@@ -2013,6 +2013,10 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 	var channelType *lnwire.ChannelType
 	switch in.CommitmentType {
 	case lnrpc.CommitmentType_UNKNOWN_COMMITMENT_TYPE:
+		if in.ZeroConf {
+			return nil, fmt.Errorf("use anchors for zero-conf")
+		}
+
 		break
 
 	case lnrpc.CommitmentType_LEGACY:
@@ -4012,12 +4016,17 @@ func createRPCOpenChannel(r *rpcServer, dbChannel *channeldb.OpenChannel,
 	// Extract the commitment type from the channel type flags.
 	commitmentType := rpcCommitmentType(dbChannel.ChanType)
 
+	dbScid := dbChannel.ShortChannelID
+
+	// Fetch the set of aliases for the channel.
+	channelAliases := r.server.aliasMgr.GetAliases(dbScid)
+
 	channel := &lnrpc.Channel{
 		Active:                isActive,
 		Private:               isPrivate(dbChannel),
 		RemotePubkey:          nodeID,
 		ChannelPoint:          chanPoint.String(),
-		ChanId:                dbChannel.ShortChannelID.ToUint64(),
+		ChanId:                dbScid.ToUint64(),
 		Capacity:              int64(dbChannel.Capacity),
 		LocalBalance:          int64(localBalance.ToSatoshis()),
 		RemoteBalance:         int64(remoteBalance.ToSatoshis()),
@@ -4039,10 +4048,26 @@ func createRPCOpenChannel(r *rpcServer, dbChannel *channeldb.OpenChannel,
 		RemoteConstraints: createChannelConstraint(
 			&dbChannel.RemoteChanCfg,
 		),
+		AliasScids:          make([]uint64, 0, len(channelAliases)),
+		ZeroConf:            dbChannel.IsZeroConf(),
+		ZeroConfHasSixConfs: dbChannel.ZeroConfConfirmed(),
 		// TODO: remove the following deprecated fields
 		CsvDelay:             uint32(dbChannel.LocalChanCfg.CsvDelay),
 		LocalChanReserveSat:  int64(dbChannel.LocalChanCfg.ChanReserve),
 		RemoteChanReserveSat: int64(dbChannel.RemoteChanCfg.ChanReserve),
+	}
+
+	if dbChannel.IsZeroConf() && dbChannel.ZeroConfConfirmed() {
+		// Else the zero-conf channel has 6 confs, so set ChanId to the
+		// confirmed SCID. This is for consistency with things like the
+		// router and gossiper. If this is not true, then the ChanId is
+		// the initial alias SCID.
+		channel.ChanId = dbChannel.ZeroConfRealScid().ToUint64()
+	}
+
+	// Populate the set of aliases.
+	for _, chanAlias := range channelAliases {
+		channel.AliasScids = append(channel.AliasScids, chanAlias.ToUint64())
 	}
 
 	for i, htlc := range localCommit.Htlcs {

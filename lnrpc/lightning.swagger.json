@@ -3283,6 +3283,22 @@
         "remote_constraints": {
           "$ref": "#/definitions/lnrpcChannelConstraints",
           "description": "List constraints for the remote node."
+        },
+        "alias_scids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uint64"
+          },
+          "description": "This lists out the set of alias short channel ids that exist for a channel.\nThis may be empty."
+        },
+        "zero_conf": {
+          "type": "boolean",
+          "description": "Whether or not this is a zero-conf channel."
+        },
+        "zero_conf_has_six_confs": {
+          "type": "boolean",
+          "description": "If this is a zero-conf channel, whether or not it has reached 6 confs."
         }
       }
     },

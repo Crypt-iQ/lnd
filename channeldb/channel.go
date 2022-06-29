@@ -126,6 +126,11 @@ var (
 	// sent was a revocation and false when it was a commitment signature.
 	// This is nil in the case of new channels with no updates exchanged.
 	lastWasRevokeKey = []byte("last-was-revoke")
+
+	// deliveryScriptKey is a key that stores the delivery script that was
+	// sent in Shutdown. BOLT#02 requires that we remember it so that we
+	// can retransmit it in the reestablish phase.
+	deliveryScriptKey = []byte("shutdown-delivery-script")
 )
 
 var (
@@ -739,6 +744,10 @@ type OpenChannel struct {
 	// have private key isolation from lnd.
 	RevocationKeyLocator keychain.KeyLocator
 
+	// ShutdownDeliveryScript stores the delivery script that we've sent in
+	// Shutdown. It is empty if we haven't sent Shutdown.
+	ShutdownDeliveryScript lnwire.DeliveryAddress
+
 	// TODO(roasbeef): eww
 	Db *ChannelStateDB
 
@@ -1034,6 +1043,41 @@ func (c *OpenChannel) MarkAsOpen(openLoc lnwire.ShortChannelID) error {
 
 	return nil
 }
+
+// PersistLocalDeliveryScript persists our local delivery script under the
+//
+func (c *OpenChannel) PersistDeliveryScript(
+	deliveryScript lnwire.DeliveryAddress) error {
+
+	c.Lock()
+	defer c.Unlock()
+
+	if err := kvdb.Update(c.Db.backend, func(tx kvdb.RwTx) error {
+		chanBucket, err := fetchChanBucketRw(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel, err := fetchOpenChannel(chanBucket, &c.FundingOutpoint)
+		if err != nil {
+			return err
+		}
+
+		channel.ShutdownDeliveryScript = deliveryScript
+
+		return putOpenChannel(chanBucket, channel)
+	}, func() {}); err != nil {
+		return err
+	}
+
+	c.ShutdownDeliveryScript = deliveryScript
+
+	return nil
+}
+
+// put
 
 // MarkDataLoss marks sets the channel status to LocalDataLoss and stores the
 // passed commitPoint for use to retrieve funds in case the remote force closes
@@ -1413,6 +1457,11 @@ func putOpenChannel(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 		if err != nil {
 			return fmt.Errorf("unable to store thaw height: %v", err)
 		}
+	}
+
+	// Write out the delivery script used in Shutdown.
+	if err := putDeliveryScript(chanBucket, channel); err != nil {
+		return fmt.Errorf("unable to store delivery script: %v", err)
 	}
 
 	// Finally, we'll write out the revocation state for both parties
@@ -3438,6 +3487,11 @@ func putChanCommitments(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 	return putChanCommitment(
 		chanBucket, &channel.RemoteCommitment, false,
 	)
+}
+
+func putDeliveryScript(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
+	// ...
+	//
 }
 
 func putChanRevocationState(chanBucket kvdb.RwBucket, channel *OpenChannel) error {

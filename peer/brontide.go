@@ -2529,7 +2529,10 @@ func chooseDeliveryScript(upfront,
 }
 
 // restartCoopClose checks whether we need to restart the cooperative close
-// process for a given channel.
+// process for a given channel. This function is called for channels that:
+// - coop closed in v0.15.0 and didn't finish negotiation
+// - coop closed in v0.16.0 and reached the closing_signed stage.
+// TODO: optionally check script
 func (p *Brontide) restartCoopClose(lnChan *lnwallet.LightningChannel) (
 	*lnwire.Shutdown, error) {
 
@@ -2708,6 +2711,8 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 			req.Err <- err
 			return
 		}
+
+		// TODO: call ChannelClean at some point?
 
 		p.activeChanCloses[chanID] = chanCloser
 
@@ -3270,7 +3275,7 @@ func (p *Brontide) handleCloseMsg(msg *closeMsg) {
 	// Next, we'll process the next message using the target state machine.
 	// We'll either continue negotiation, or halt.
 	msgs, closeFin, err := chanCloser.ProcessCloseMsg(
-		msg.msg,
+		msg.msg, true,
 	)
 	if err != nil {
 		err := fmt.Errorf("unable to process close msg: %v", err)

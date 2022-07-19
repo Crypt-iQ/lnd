@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -68,7 +69,7 @@ func TestMaybeMatchScript(t *testing.T) {
 			name:           "upfront shutdown set, script not ok",
 			shutdownScript: p2wkh,
 			upfrontScript:  p2wsh,
-			expectedErr:    ErrUpfrontShutdownScriptMismatch,
+			expectedErr:    htlcswitch.ErrUpfrontShutdownScriptMismatch,
 		},
 		{
 			name:           "nil shutdown and empty upfront",
@@ -169,7 +170,24 @@ func (m *mockChannel) CreateCloseProposal(fee btcutil.Amount,
 	localScript, remoteScript []byte,
 ) (input.Signature, *chainhash.Hash, btcutil.Amount, error) {
 
-	return nil, nil, 0, nil
+	s := &lnwire.Sig{
+		// r value
+		0x4e, 0x45, 0xe1, 0x69, 0x32, 0xb8, 0xaf, 0x51,
+		0x49, 0x61, 0xa1, 0xd3, 0xa1, 0xa2, 0x5f, 0xdf,
+		0x3f, 0x4f, 0x77, 0x32, 0xe9, 0xd6, 0x24, 0xc6,
+		0xc6, 0x15, 0x48, 0xab, 0x5f, 0xb8, 0xcd, 0x41,
+		// s value
+		0x18, 0x15, 0x22, 0xec, 0x8e, 0xca, 0x07, 0xde,
+		0x48, 0x60, 0xa4, 0xac, 0xdd, 0x12, 0x90, 0x9d,
+		0x83, 0x1c, 0xc5, 0x6c, 0xbb, 0xac, 0x46, 0x22,
+		0x08, 0x22, 0x21, 0xa8, 0x76, 0x8d, 0x1d, 0x09,
+	}
+	ecdsaSig, err := s.ToSignature()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	return ecdsaSig, nil, 0, nil
 }
 
 func (m *mockChannel) CompleteCooperativeClose(localSig,
@@ -223,7 +241,7 @@ func TestMaxFeeClamp(t *testing.T) {
 				ChanCloseCfg{
 					Channel: &channel,
 					MaxFee:  test.inputMaxFee,
-				}, nil, test.idealFee, 0, nil, false,
+				}, nil, test.idealFee, 0, nil, false, false,
 			)
 
 			require.Equal(t, test.maxFee, chanCloser.maxFee)
@@ -242,8 +260,9 @@ func TestMaxFeeBailOut(t *testing.T) {
 		idealFee    = chainfee.SatPerKWeight(253)
 	)
 
-	for _, isInitiator := range []bool{true, false} {
-		t.Run(fmt.Sprintf("initiator=%v", isInitiator), func(t *testing.T) {
+	for _, initiator := range []bool{true, false} {
+		t.Run(fmt.Sprintf("initiator=%v", initiator), func(t *testing.T) {
+			isInitiator := initiator
 			t.Parallel()
 
 			// First, we'll make our mock channel, and use that to
@@ -256,7 +275,7 @@ func TestMaxFeeBailOut(t *testing.T) {
 				MaxFee: idealFee * 2,
 			}
 			chanCloser := NewChanCloser(
-				closeCfg, nil, idealFee, 0, nil, false,
+				closeCfg, nil, idealFee, 0, nil, false, false,
 			)
 
 			// We'll now force the channel state into the
@@ -265,6 +284,11 @@ func TestMaxFeeBailOut(t *testing.T) {
 			// we'll attempt to actually "negotiate" here.
 			chanCloser.state = closeFeeNegotiation
 			chanCloser.lastFeeProposal = absoluteFee
+
+			// Put the ChanCloser into a clean state by calling
+			// ChannelClean.
+			_, _, err := chanCloser.ChannelClean()
+			require.NoError(t, err)
 
 			// Next, we'll make a ClosingSigned message that
 			// proposes a fee that's above the specified max fee.
@@ -277,7 +301,7 @@ func TestMaxFeeBailOut(t *testing.T) {
 				FeeSatoshis: absoluteFee * 2,
 			}
 
-			_, _, err := chanCloser.ProcessCloseMsg(closeMsg)
+			_, _, err = chanCloser.ProcessCloseMsg(closeMsg, true)
 
 			switch isInitiator {
 			// If we're the initiator, then we expect an error at

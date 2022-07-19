@@ -190,6 +190,10 @@ const (
 	// A tlv type used to serialize and deserialize the
 	// `InitialRemoteBalance` field.
 	initialRemoteBalanceType tlv.Type = 3
+
+	// A tlv type definition used to serialize and deserialize the
+	// sentShutdown field.
+	sentShutdownType tlv.Type = 4
 )
 
 // indexStatus is an enum-like type that describes what state the
@@ -739,6 +743,10 @@ type OpenChannel struct {
 	// have private key isolation from lnd.
 	RevocationKeyLocator keychain.KeyLocator
 
+	// sentShutdown denotes whether or not we've sent the Shutdown message
+	// for this channel.
+	sentShutdown bool
+
 	// TODO(roasbeef): eww
 	Db *ChannelStateDB
 
@@ -1099,6 +1107,51 @@ func (c *OpenChannel) MarkBorked() error {
 	defer c.Unlock()
 
 	return c.putChanStatus(ChanStatusBorked)
+}
+
+// MarkShutdownSent is used to mark that we've sent a Shutdown message for this
+// channel. This is so we can retransmit Shutdown.
+func (c *OpenChannel) MarkShutdownSent() error {
+	c.Lock()
+	defer c.Unlock()
+
+	if err := kvdb.Update(c.Db.backend, func(tx kvdb.RwTx) error {
+		chanBucket, err := fetchChanBucketRw(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel, err := fetchOpenChannel(
+			chanBucket, &c.FundingOutpoint,
+		)
+		if err != nil {
+			return err
+		}
+
+		channel.sentShutdown = true
+
+		return putOpenChannel(chanBucket, channel)
+	}, func() {}); err != nil {
+		return err
+	}
+
+	c.sentShutdown = true
+
+	return nil
+}
+
+// HasSentShutdown returns whether or not we've ever sent Shutdown for this
+// channel. For nodes upgrading to 0.16.0, this will initially be false even if
+// a Shutdown has been sent. This doesn't matter since this function is only
+// used when restarting a ChannelLink and pre-0.16.0 nodes only sent Shutdown
+// after the link was permanently stopped.
+func (c *OpenChannel) HasSentShutdown() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.sentShutdown
 }
 
 // PersistDeliveryScript is used during the cooperative close flow to persist
@@ -3357,6 +3410,12 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 	localBalance := uint64(channel.InitialLocalBalance)
 	remoteBalance := uint64(channel.InitialRemoteBalance)
 
+	// Convert sentShutdown to a uint8.
+	var sentShutdownVal uint8
+	if channel.sentShutdown {
+		sentShutdownVal = 1
+	}
+
 	// Create the tlv stream.
 	tlvStream, err := tlv.NewStream(
 		// Write the RevocationKeyLocator as the first entry in a tlv
@@ -3369,6 +3428,9 @@ func putChanInfo(chanBucket kvdb.RwBucket, channel *OpenChannel) error {
 		),
 		tlv.MakePrimitiveRecord(
 			initialRemoteBalanceType, &remoteBalance,
+		),
+		tlv.MakePrimitiveRecord(
+			sentShutdownType, &sentShutdownVal,
 		),
 	)
 	if err != nil {
@@ -3571,6 +3633,8 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 	var (
 		localBalance  uint64
 		remoteBalance uint64
+
+		sentShutdownVal uint8
 	)
 
 	// Create the tlv stream.
@@ -3586,6 +3650,9 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 		tlv.MakePrimitiveRecord(
 			initialRemoteBalanceType, &remoteBalance,
 		),
+		tlv.MakePrimitiveRecord(
+			sentShutdownType, &sentShutdownVal,
+		),
 	)
 	if err != nil {
 		return err
@@ -3598,6 +3665,11 @@ func fetchChanInfo(chanBucket kvdb.RBucket, channel *OpenChannel) error {
 	// Attach the balance fields.
 	channel.InitialLocalBalance = lnwire.MilliSatoshi(localBalance)
 	channel.InitialRemoteBalance = lnwire.MilliSatoshi(remoteBalance)
+
+	// Populate the sentShutdown field.
+	if sentShutdownVal == 1 {
+		channel.sentShutdown = true
+	}
 
 	channel.Packager = NewChannelPackager(channel.ShortChannelID)
 

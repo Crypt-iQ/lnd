@@ -786,11 +786,13 @@ func (f *mockChannelLink) ChannelPoint() *wire.OutPoint                 { return
 func (f *mockChannelLink) Stop()                                        {}
 func (f *mockChannelLink) EligibleToForward() bool                      { return f.eligible }
 func (f *mockChannelLink) MayAddOutgoingHtlc(lnwire.MilliSatoshi) error { return nil }
-func (f *mockChannelLink) ShutdownIfChannelClean() error                { return nil }
 func (f *mockChannelLink) setLiveShortChanID(sid lnwire.ShortChannelID) { f.shortChanID = sid }
 func (f *mockChannelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 	f.eligible = true
 	return f.shortChanID, nil
+}
+func (f *mockChannelLink) NotifyShouldShutdown(req *ChanClose) error {
+	return nil
 }
 
 var _ ChannelLink = (*mockChannelLink)(nil)

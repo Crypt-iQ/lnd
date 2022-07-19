@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +49,7 @@ func TestMaybeMatchScript(t *testing.T) {
 			name:           "upfront shutdown set, script not ok",
 			shutdownScript: addr1,
 			upfrontScript:  addr2,
-			expectedErr:    ErrUpfrontShutdownScriptMismatch,
+			expectedErr:    htlcswitch.ErrUpfrontShutdownScriptMismatch,
 		},
 		{
 			name:           "nil shutdown and empty upfront",

@@ -997,6 +997,8 @@ func (f *Manager) stateStep(channel *channeldb.OpenChannel,
 			return nil
 		}
 
+		log.Debugf("receivedFundingLocked success")
+
 		var peerAlias *lnwire.ShortChannelID
 		if channel.IsZeroConf() {
 			// We'll need to wait until funding_locked has been
@@ -2819,6 +2821,7 @@ func (f *Manager) sendFundingLocked(completeChan *channeldb.OpenChannel,
 	// down.
 	for {
 		connected := make(chan lnpeer.Peer, 1)
+		log.Debugf("sendFundingLocked NotifyWhenOnline")
 		f.cfg.NotifyWhenOnline(peerKey, connected)
 
 		var peer lnpeer.Peer
@@ -2907,6 +2910,7 @@ func (f *Manager) receivedFundingLocked(node *btcec.PublicKey,
 	connected := make(chan lnpeer.Peer, 1)
 	var peerKey [33]byte
 	copy(peerKey[:], node.SerializeCompressed())
+	log.Debugf("Calling NotifyWhenOnline")
 	f.cfg.NotifyWhenOnline(peerKey, connected)
 
 	select {

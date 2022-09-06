@@ -3178,6 +3178,10 @@ func (s *server) BroadcastMessage(skips map[route.Vertex]struct{},
 func (s *server) NotifyWhenOnline(peerKey [33]byte,
 	peerChan chan<- lnpeer.Peer) {
 
+	srvrLog.Debugf("in NotifyWhenOnline")
+
+	time.Sleep(time.Millisecond * 500)
+
 	s.mu.Lock()
 
 	// Compute the target peer's identifier.
@@ -3195,6 +3199,13 @@ func (s *server) NotifyWhenOnline(peerKey [33]byte,
 		select {
 		case <-peer.ActiveSignal():
 		case <-peer.QuitSignal():
+			// TODO: add to peerConnectedListeners?
+			// s.mu.Lock()
+			// s.peerConnectedListeners[pubStr] = append(
+			// 	s.peerConnectedListeners[pubStr], peerChan,
+			// )
+			// s.mu.Unlock()
+			fmt.Println("peer quit signal!!!!\n\n\n\n\n\n")
 			// The peer quit so we'll just return.
 			return
 		}

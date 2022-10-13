@@ -107,6 +107,12 @@ const (
 	// for the funding transaction to be confirmed before forgetting
 	// channels that aren't initiated by us. 2016 blocks is ~2 weeks.
 	maxWaitNumBlocksFundingConf = 2016
+
+	// fundingBroadcastBuffer is the amount of blocks before the broadcast
+	// height to use as a height hint when checking if any of the funding
+	// inputs have been double spent. This is done in case the funding flow
+	// takes longer than expected.
+	fundingBroadcastBuffer = 12
 )
 
 var (
@@ -126,6 +132,11 @@ var (
 	// script is set for a peer that does not support the feature bit.
 	errUpfrontShutdownScriptNotSupported = errors.New("peer does not support" +
 		"option upfront shutdown script")
+
+	// errFundingInputSpent is returned if the initiator sees that the
+	// inputs to the funding transaction have been spent after broadcasting
+	// the funding transaction.
+	errFundingInputSpent = errors.New("a funding input has been spent")
 
 	zeroID [32]byte
 )
@@ -1214,8 +1225,8 @@ func (f *Manager) advancePendingChannelState(
 	}
 
 	confChannel, err := f.waitForFundingWithTimeout(channel)
-	if err == ErrConfirmationTimeout {
-		return f.fundingTimeout(channel, pendingChanID)
+	if err == ErrConfirmationTimeout || err == errFundingInputSpent {
+		return f.fundingTimeout(channel, pendingChanID, err)
 	} else if err != nil {
 		return fmt.Errorf("error waiting for funding "+
 			"confirmation for ChannelPoint(%v): %v",
@@ -2441,11 +2452,10 @@ type confirmedChannel struct {
 }
 
 // fundingTimeout is called when callers of waitForFundingWithTimeout receive
-// an ErrConfirmationTimeout. It is used to clean-up channel state and mark the
-// channel as closed. The error is only returned for the responder of the
-// channel flow.
+// an ErrConfirmationTimeout or errFundingInputSpent error. It is used to
+// clean-up channel state and mark the channel as closed.
 func (f *Manager) fundingTimeout(c *channeldb.OpenChannel,
-	pendingID [32]byte) error {
+	pendingID [32]byte, fundingErr error) error {
 
 	// We'll get a timeout if the number of blocks mined since the channel
 	// was initiated reaches maxWaitNumBlocksFundingConf and we are not the
@@ -2471,9 +2481,6 @@ func (f *Manager) fundingTimeout(c *channeldb.OpenChannel,
 		return fmt.Errorf("failed closing channel %v: %v",
 			c.FundingOutpoint, err)
 	}
-
-	timeoutErr := fmt.Errorf("timeout waiting for funding tx (%v) to "+
-		"confirm", c.FundingOutpoint)
 
 	// When the peer comes online, we'll notify it that we are now
 	// considering the channel flow canceled.
@@ -2502,10 +2509,10 @@ func (f *Manager) fundingTimeout(c *channeldb.OpenChannel,
 
 		// The reservation won't exist at this point, but we'll send an
 		// Error message over anyways with ChanID set to pendingID.
-		f.failFundingFlow(peer, pendingID, timeoutErr)
+		f.failFundingFlow(peer, pendingID, fundingErr)
 	}()
 
-	return timeoutErr
+	return fundingErr
 }
 
 // waitForFundingWithTimeout is a wrapper around waitForFundingConfirmation and
@@ -2517,11 +2524,12 @@ func (f *Manager) waitForFundingWithTimeout(
 	ch *channeldb.OpenChannel) (*confirmedChannel, error) {
 
 	confChan := make(chan *confirmedChannel)
+	spentChan := make(chan error, 1)
 	timeoutChan := make(chan error, 1)
 	cancelChan := make(chan struct{})
 
 	f.wg.Add(1)
-	go f.waitForFundingConfirmation(ch, cancelChan, confChan)
+	go f.waitForFundingConfirmation(ch, cancelChan, confChan, spentChan)
 
 	// If we are not the initiator, we have no money at stake and will
 	// timeout waiting for the funding transaction to confirm after a
@@ -2533,6 +2541,9 @@ func (f *Manager) waitForFundingWithTimeout(
 	defer close(cancelChan)
 
 	select {
+	case err := <-spentChan:
+		return nil, err
+
 	case err := <-timeoutChan:
 		if err != nil {
 			return nil, err
@@ -2573,14 +2584,32 @@ func makeFundingScript(channel *channeldb.OpenChannel) ([]byte, error) {
 // confirmation, and then to notify the other systems that must be notified
 // when a channel has become active for lightning transactions.
 // The wait can be canceled by closing the cancelChan. In case of success,
-// a *lnwire.ShortChannelID will be passed to confChan.
+// a *lnwire.ShortChannelID will be passed to confChan. If this function
+// detects that the inputs to the funding transaction have been spent by a
+// different transaction, an error will be sent along the spentChan. The
+// spentChan MUST be buffered.
 //
 // NOTE: This MUST be run as a goroutine.
 func (f *Manager) waitForFundingConfirmation(
 	completeChan *channeldb.OpenChannel, cancelChan <-chan struct{},
-	confChan chan<- *confirmedChannel) {
+	confChan chan<- *confirmedChannel, spentChan chan<- error) {
 
 	defer f.wg.Done()
+
+	// If we are the initiator, we'll know the inputs to the funding
+	// transaction and will check for the inputs being used in a different
+	// transaction. This is done before the defer close(confChan) call so
+	// that the select statement in waitForFundingWithTimeout doesn't
+	// accidentally trigger on the closed channel instead of the error
+	// channel.
+	if completeChan.IsInitiator && completeChan.ChanType.HasFundingTx() {
+		err := f.checkFundingInputsSpent(completeChan)
+		if err != nil {
+			spentChan <- err
+			return
+		}
+	}
+
 	defer close(confChan)
 
 	// Register with the ChainNotifier for a notification once the funding
@@ -2725,6 +2754,82 @@ func (f *Manager) waitForTimeout(completeChan *channeldb.OpenChannel,
 			// waiting for the funding transaction on startup.
 			return
 		}
+	}
+}
+
+// checkFundingInputsSpent checks whether the inputs to the funding transaction
+// are spent by another transaction. This will allow the funding manager to
+// forget the channel.
+func (f *Manager) checkFundingInputsSpent(c *channeldb.OpenChannel) error {
+	numInputs := len(c.FundingTxn.TxIn)
+	errChan := make(chan error, numInputs)
+	spendChan := make(chan *chainntnfs.SpendDetail, numInputs)
+	done := make(chan interface{})
+
+	// Close the done channel when this function exits, so that the
+	// goroutines can clean up.
+	defer close(done)
+
+	for _, input := range c.FundingTxn.TxIn {
+		f.wg.Add(1)
+		go func(txIn *wire.TxIn) {
+			defer f.wg.Done()
+			// We use the zero-taproot-pk-script here since it will
+			// only notify on the outpoint being spent and not the
+			// outpoint+pkscript. This is because:
+			// - it's not necessary to be notified on the pkscript
+			//   being spent.
+			// - we cannot use ComputePkScript for an input that
+			//   spends a taproot output.
+			zeroScript := chainntnfs.ZeroTaprootPkScript.Script()
+			spendNtfn, err := f.cfg.Notifier.RegisterSpendNtfn(
+				&txIn.PreviousOutPoint, zeroScript,
+				c.BroadcastHeight()-fundingBroadcastBuffer,
+			)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			defer spendNtfn.Cancel()
+
+			select {
+			case spend, ok := <-spendNtfn.Spend:
+				if !ok {
+					err := fmt.Errorf("spend chan closed")
+					errChan <- err
+					return
+				}
+
+				// Send along the spendChan.
+				spendChan <- spend
+
+			case <-f.quit:
+				// The funding manager is quitting.
+
+			case <-done:
+				// Another goroutine is cleaning us up.
+			}
+		}(input)
+	}
+
+	select {
+	case spend := <-spendChan:
+		// Only return an error if the spending transaction is not the
+		// same as the funding transaction.
+		if *spend.SpenderTxHash != c.FundingTxn.TxHash() {
+			log.Infof("Funding tx (%v) invalidated by %v",
+				c.FundingTxn.TxHash(), *spend.SpenderTxHash)
+			return errFundingInputSpent
+		}
+
+		return nil
+
+	case err := <-errChan:
+		return err
+
+	case <-f.quit:
+		return ErrFundingManagerShuttingDown
 	}
 }
 
@@ -3256,7 +3361,9 @@ func (f *Manager) waitForZeroConfChannel(c *channeldb.OpenChannel,
 	// is already confirmed, the chainntnfs subsystem will return with the
 	// confirmed tx. Otherwise, we'll wait here until confirmation occurs.
 	confChan, err := f.waitForFundingWithTimeout(c)
-	if err != nil {
+	if err == errFundingInputSpent {
+		return f.fundingTimeout(c, pendingID, err)
+	} else if err != nil {
 		return fmt.Errorf("error waiting for zero-conf funding "+
 			"confirmation for ChannelPoint(%v): %v",
 			c.FundingOutpoint, err)

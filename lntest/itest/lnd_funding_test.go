@@ -1023,6 +1023,10 @@ func testFundingConflictInner(net *lntest.NetworkHarness, t *harnessTest,
 	)
 	require.NoError(t.t, err)
 
+	// Mine 144 blocks
+	_, err = net.Miner.Client.Generate(144)
+	require.NoError(t.t, err)
+
 	// Alice should no longer see the channel as pending.
 	err = wait.NoError(func() error {
 		aliceNumChans, err := numOpenChannelsPending(ctxb, alice)

@@ -113,6 +113,12 @@ const (
 	// inputs have been double spent. This is done in case the funding flow
 	// takes longer than expected.
 	fundingBroadcastBuffer = 12
+
+	// doubleSpendReorgBuffer is the number of blocks after which we'll
+	// consider a double-spend reorg-safe. We must use a value of 144 here
+	// since this is what the txnotifier code uses to determine whether or
+	// not to use the Done channel.
+	doubleSpendReorgBuffer = 144
 )
 
 var (
@@ -2763,7 +2769,6 @@ func (f *Manager) waitForTimeout(completeChan *channeldb.OpenChannel,
 func (f *Manager) checkFundingInputsSpent(c *channeldb.OpenChannel) error {
 	numInputs := len(c.FundingTxn.TxIn)
 	errChan := make(chan error, numInputs)
-	spendChan := make(chan *chainntnfs.SpendDetail, numInputs)
 	done := make(chan interface{})
 
 	// Close the done channel when this function exits, so that the
@@ -2772,64 +2777,146 @@ func (f *Manager) checkFundingInputsSpent(c *channeldb.OpenChannel) error {
 
 	for _, input := range c.FundingTxn.TxIn {
 		f.wg.Add(1)
-		go func(txIn *wire.TxIn) {
-			defer f.wg.Done()
-			// We use the zero-taproot-pk-script here since it will
-			// only notify on the outpoint being spent and not the
-			// outpoint+pkscript. This is because:
-			// - it's not necessary to be notified on the pkscript
-			//   being spent.
-			// - we cannot use ComputePkScript for an input that
-			//   spends a taproot output.
-			zeroScript := chainntnfs.ZeroTaprootPkScript.Script()
-			spendNtfn, err := f.cfg.Notifier.RegisterSpendNtfn(
-				&txIn.PreviousOutPoint, zeroScript,
-				c.BroadcastHeight()-fundingBroadcastBuffer,
-			)
-			if err != nil {
-				errChan <- err
-				return
-			}
-
-			defer spendNtfn.Cancel()
-
-			select {
-			case spend, ok := <-spendNtfn.Spend:
-				if !ok {
-					err := fmt.Errorf("spend chan closed")
-					errChan <- err
-					return
-				}
-
-				// Send along the spendChan.
-				spendChan <- spend
-
-			case <-f.quit:
-				// The funding manager is quitting.
-
-			case <-done:
-				// Another goroutine is cleaning us up.
-			}
-		}(input)
+		go f.registerConflictTx(input, c.BroadcastHeight(),
+			c.FundingTxn.TxHash(), errChan, done)
 	}
 
 	select {
-	case spend := <-spendChan:
-		// Only return an error if the spending transaction is not the
-		// same as the funding transaction.
-		if *spend.SpenderTxHash != c.FundingTxn.TxHash() {
-			log.Infof("Funding tx (%v) invalidated by %v",
-				c.FundingTxn.TxHash(), *spend.SpenderTxHash)
-			return errFundingInputSpent
-		}
-
-		return nil
-
 	case err := <-errChan:
 		return err
 
 	case <-f.quit:
 		return ErrFundingManagerShuttingDown
+	}
+}
+
+// registerConflictTx registers to be notified of a conflict transaction. If a
+// conflict transaction is found, this function will return if:
+// - the SpendEvent's Done channel is sent on, or
+// - the SpendDetails were 144 blocks in the past
+// The Done channel is not always sent on if the spend happened a while ago
+// from the Notifier's PoV.
+//
+// NOTE: This MUST be run as a goroutine and the calling function must
+// increment the funding manager's waitgroup.
+func (f *Manager) registerConflictTx(txIn *wire.TxIn, broadcastHeight uint32,
+	fundingTxid chainhash.Hash, errChan chan error,
+	doneChan chan interface{}) {
+
+	defer f.wg.Done()
+
+	// We use the zero-taproot-pk-script here since it will only notify on
+	// the outpoint being spent and not the outpoint+pkscript. This is
+	// because:
+	// - it's not necessary to be notified on the pkscript being spent.
+	// - we cannot use ComputePkScript for an input that spends a taproot
+	//   output.
+	zeroScript := chainntnfs.ZeroTaprootPkScript.Script()
+	spendNtfn, err := f.cfg.Notifier.RegisterSpendNtfn(
+		&txIn.PreviousOutPoint, zeroScript,
+		broadcastHeight-fundingBroadcastBuffer,
+	)
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	defer spendNtfn.Cancel()
+
+	select {
+	case spend, ok := <-spendNtfn.Spend:
+		if !ok {
+			errChan <- fmt.Errorf("spend chan closed")
+			return
+		}
+
+		// If the spending transaction is the same as the funding,
+		// we'll send nil on errChan and exit.
+		if *spend.SpenderTxHash == fundingTxid {
+			errChan <- nil
+			return
+		}
+
+		// If SpendingHeight is at least 144 blocks in the past, we
+		// won't listen on the Done channel.
+		epochClient, err := f.cfg.Notifier.RegisterBlockEpochNtfn(nil)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to register for block")
+			return
+		}
+
+		defer epochClient.Cancel()
+
+		var bestHeight int32
+		select {
+		case epoch, ok := <-epochClient.Epochs:
+			if !ok {
+				errChan <- fmt.Errorf("epoch chan closed")
+				return
+			}
+
+			bestHeight = epoch.Height
+
+		case <-f.quit:
+			return
+
+		case <-doneChan:
+			return
+		}
+
+		if spend.SpendingHeight+doubleSpendReorgBuffer <= bestHeight {
+			// This can happen if LND restarted and came back on
+			// much later. In this case, send along the errChan to
+			// signal that we can clean this channel up.
+			errChan <- errFundingInputSpent
+			return
+		}
+
+		// Else, we'll listen on the Done channel for 160 blocks just
+		// as an extra margin.
+		endHeight := bestHeight + 160
+
+		for {
+			select {
+			case <-spendNtfn.Done:
+				// The conflict transaction is now sufficiently
+				// confirmed.
+				errChan <- errFundingInputSpent
+				return
+
+			case epoch, ok := <-epochClient.Epochs:
+				if !ok {
+					err := fmt.Errorf("epoch chan closed")
+					errChan <- err
+					return
+				}
+
+				if endHeight <= epoch.Height {
+					// The conflict transaction did not
+					// reach a sufficient number of
+					// confirmations to be considered
+					// reorg-safe. It is possible that the
+					// conflict transaction was reorg'd
+					// out. In this case, we'll just fall
+					// back to the happy path behavior and
+					// wait for the funding tx to confirm.
+					errChan <- nil
+					return
+				}
+
+			case <-f.quit:
+				return
+
+			case <-doneChan:
+				return
+			}
+		}
+
+	case <-f.quit:
+		// The funding manager is quitting.
+
+	case <-doneChan:
+		// The calling function is cleaning us up.
 	}
 }
 

@@ -272,6 +272,11 @@ type ChanCloser struct {
 	// receivedRemoteShutdown stores whether or not we've processed a
 	// Shutdown message from the remote peer.
 	receivedRemoteShutdown bool
+
+	// cleanOnRecv means that the channel is already clean, but we are
+	// waiting for the peer's Shutdown and will call ChannelClean when we
+	// receive it. This is only used when we restart the connection.
+	cleanOnRecv bool
 }
 
 // calcCoopCloseFee computes an "ideal" absolute co-op close fee given the
@@ -318,7 +323,8 @@ func (d *SimpleCoopFeeEstimator) EstimateFee(chanType channeldb.ChannelType,
 // be populated iff, we're the initiator of this closing request.
 func NewChanCloser(cfg ChanCloseCfg, deliveryScript []byte,
 	idealFeePerKw chainfee.SatPerKWeight, negotiationHeight uint32,
-	closeReq *htlcswitch.ChanClose, locallyInitiated bool) *ChanCloser {
+	closeReq *htlcswitch.ChanClose, locallyInitiated,
+	cleanOnRecv bool) *ChanCloser {
 
 	cid := lnwire.NewChanIDFromOutPoint(cfg.Channel.ChannelPoint())
 	return &ChanCloser{
@@ -332,6 +338,7 @@ func NewChanCloser(cfg ChanCloseCfg, deliveryScript []byte,
 		localDeliveryScript: deliveryScript,
 		priorFeeOffers:      make(map[btcutil.Amount]*lnwire.ClosingSigned),
 		locallyInitiated:    locallyInitiated,
+		cleanOnRecv:         cleanOnRecv,
 	}
 }
 
@@ -700,6 +707,14 @@ func (c *ChanCloser) ProcessCloseMsg(msg lnwire.Message, remote bool) (
 
 		chancloserLog.Infof("ChannelPoint(%v): entering fee "+
 			"negotiation", c.chanPoint)
+
+		// If the cleanOnRecv bool is set, then we should call
+		// ChannelClean. It's not possible to be in the finished state
+		// at this point. The local message is always processed first,
+		// so the remote MUST be sending the message here.
+		if c.cleanOnRecv && remote {
+			return c.ChannelClean()
+		}
 
 		return nil, false, nil
 

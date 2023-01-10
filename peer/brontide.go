@@ -2614,7 +2614,7 @@ func (p *Brontide) fetchActiveChanCloser(chanID lnwire.ChannelID) (
 	}
 
 	chanCloser, err = p.createChanCloser(
-		channel, deliveryScript, feePerKw, nil, false,
+		channel, deliveryScript, feePerKw, nil, false, false,
 	)
 	if err != nil {
 		p.log.Errorf("unable to create chan closer: %v", err)
@@ -2708,8 +2708,10 @@ func (p *Brontide) restartCoopClose(lnChan *lnwallet.LightningChannel) (
 		channeldb.ChanStatusLocalCloseInitiator,
 	)
 
+	// We set the CleanOnReceive flag so the ChanCloser immediately calls
+	// ChannelClean on receipt of the peer's Shutdown message.
 	chanCloser, err := p.createChanCloser(
-		lnChan, deliveryScript, feePerKw, nil, locallyInitiated,
+		lnChan, deliveryScript, feePerKw, nil, locallyInitiated, true,
 	)
 	if err != nil {
 		p.log.Errorf("unable to create chan closer: %v", err)
@@ -2722,10 +2724,12 @@ func (p *Brontide) restartCoopClose(lnChan *lnwallet.LightningChannel) (
 	chanID := lnwire.NewChanIDFromOutPoint(&c.FundingOutpoint)
 	p.activeChanCloses[chanID] = chanCloser
 
-	// Create the Shutdown message.
-	shutdownMsg, err := chanCloser.ShutdownChan()
+	// Recreate the Shutdown message and give it to the ChanCloser.
+	shutdownMsg := lnwire.NewShutdown(chanID, deliveryScript)
+
+	_, _, err = chanCloser.ProcessCloseMsg(shutdownMsg, false)
 	if err != nil {
-		p.log.Errorf("unable to create shutdown message: %v", err)
+		peerLog.Errorf("unable to process shutdown message: %v", err)
 		delete(p.activeChanCloses, chanID)
 		return nil, err
 	}
@@ -2738,7 +2742,7 @@ func (p *Brontide) restartCoopClose(lnChan *lnwallet.LightningChannel) (
 func (p *Brontide) createChanCloser(channel *lnwallet.LightningChannel,
 	deliveryScript lnwire.DeliveryAddress, fee chainfee.SatPerKWeight,
 	req *htlcswitch.ChanClose,
-	locallyInitiated bool) (*chancloser.ChanCloser, error) {
+	locallyInitiated, cleanOnRecv bool) (*chancloser.ChanCloser, error) {
 
 	_, startingHeight, err := p.cfg.ChainIO.GetBestBlock()
 	if err != nil {
@@ -2774,6 +2778,7 @@ func (p *Brontide) createChanCloser(channel *lnwallet.LightningChannel,
 		uint32(startingHeight),
 		req,
 		locallyInitiated,
+		cleanOnRecv,
 	)
 
 	return chanCloser, nil
@@ -2841,6 +2846,7 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 
 		chanCloser, err := p.createChanCloser(
 			channel, deliveryScript, req.TargetFeePerKw, req, true,
+			false,
 		)
 		if err != nil {
 			p.log.Errorf(err.Error())

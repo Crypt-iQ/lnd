@@ -261,7 +261,7 @@ func TestMaxFeeClamp(t *testing.T) {
 					Channel:      &channel,
 					MaxFee:       test.inputMaxFee,
 					FeeEstimator: &SimpleCoopFeeEstimator{},
-				}, nil, test.idealFee, 0, nil, false,
+				}, nil, test.idealFee, 0, nil, false, false,
 			)
 
 			// We'll call initFeeBaseline early here since we need
@@ -302,7 +302,7 @@ func TestMaxFeeBailOut(t *testing.T) {
 				MaxFee: idealFee * 2,
 			}
 			chanCloser := NewChanCloser(
-				closeCfg, nil, idealFee, 0, nil, false,
+				closeCfg, nil, idealFee, 0, nil, false, false,
 			)
 
 			// We'll now force the channel state into the

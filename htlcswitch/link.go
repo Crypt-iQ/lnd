@@ -377,6 +377,16 @@ type channelLink struct {
 	// service shutdown requests from ShutdownIfChannelClean calls.
 	shutdownRequest chan *shutdownReq
 
+	// shutdownReceived is a bool that is set when we've received a
+	// Shutdown message from the remote peer.
+	//
+	// The mutex is only accessed if:
+	// - a write is occurring
+	// - a read is occurring from hasReceivedShutdown
+	// all reads from the htlcManager goroutine should be race-free.
+	shutdownReceived    bool
+	shutdownReceivedMtx sync.RWMutex
+
 	// updateFeeTimer is the timer responsible for updating the link's
 	// commitment fee every time it fires.
 	updateFeeTimer *time.Timer
@@ -589,6 +599,18 @@ func (l *channelLink) isReestablished() bool {
 // subsequent messages.
 func (l *channelLink) markReestablished() {
 	atomic.StoreInt32(&l.reestablished, 1)
+}
+
+// hasReceivedShutdown returns true if the link has received a Shutdown message
+// from the remote peer. It acquires the mutex as this is called outside of the
+// htlcManager goroutine.
+//
+// NOTE: This is only used in tests to avoid a data race when accessing the
+// private shutdownReceived boolean.
+func (l *channelLink) hasReceivedShutdown() bool {
+	l.shutdownReceivedMtx.RLock()
+	defer l.shutdownReceivedMtx.RUnlock()
+	return l.shutdownReceived
 }
 
 // IsUnadvertised returns true if the underlying channel is unadvertised.
@@ -2136,6 +2158,28 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			"ChannelPoint(%v): received error from peer: %v",
 			l.channel.ChannelPoint(), msg.Error(),
 		)
+
+	case *lnwire.Shutdown:
+		// We've received a Shutdown message from the remote peer.
+		// We'll set the shutdownReceived bool and cancel back any new
+		// HTLC's received after this point instead of forwarding them.
+		if l.shutdownReceived {
+			// Fail the link if a duplicate shutdown is received.
+			// This is also checked in peer.Brontide, but done here
+			// to properly stop the link.
+			l.fail(
+				LinkFailureError{code: ErrRemoteError},
+				"ChannelPoint(%v): received dupe shutdown "+
+					"from peer", l.channel.ChannelPoint(),
+			)
+			return
+		}
+
+		// Otherwise, set the shutdownReceived bool.
+		l.shutdownReceivedMtx.Lock()
+		l.shutdownReceived = true
+		l.shutdownReceivedMtx.Unlock()
+
 	default:
 		l.log.Warnf("received unknown message of type %T", msg)
 	}

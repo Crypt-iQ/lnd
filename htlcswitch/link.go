@@ -329,6 +329,12 @@ type ChannelLinkConfig struct {
 	// is called. It takes a quit chan that is used as a precaution to
 	// avoid deadlock.
 	NotifyCoopReady func(chanPoint *wire.OutPoint, quit chan struct{})
+
+	// RetransmitShutdown is a boolean that indicates whether the link
+	// should retransmit a Shutdown during the Reestablish flow. This
+	// automatically starts the link in "shutdown mode" so that new HTLCs
+	// are not accepted or sent.
+	RetransmitShutdown bool
 }
 
 // channelLink is the service which drives a channel's commitment update
@@ -816,6 +822,26 @@ func (l *channelLink) syncChanStates() error {
 			if err != nil {
 				return fmt.Errorf("unable to re-send "+
 					"FundingLocked: %v", err)
+			}
+		}
+
+		// If we have been signaled to retransmit Shutdown, we'll do so
+		// here.
+		if l.cfg.RetransmitShutdown {
+			// Recreate the Shutdown message.
+			shutdownMsg := lnwire.NewShutdown(
+				l.ChanID(),
+				l.channel.LocalUpfrontShutdownScript(),
+			)
+
+			// Flip the shutdownInit and shutdownSent bools.
+			l.shutdownInit = true
+			l.shutdownSent = true
+
+			err = l.cfg.Peer.SendMessage(false, shutdownMsg)
+			if err != nil {
+				return fmt.Errorf("unable to re-send "+
+					"Shutdown: %v", err)
 			}
 		}
 

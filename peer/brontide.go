@@ -778,6 +778,27 @@ func (p *Brontide) loadActiveChannels(chans []*channeldb.OpenChannel) (
 
 		p.log.Infof("loading ChannelPoint(%v)", chanPoint)
 
+		restoredDataLoss := channeldb.ChanStatusRestored | channeldb.ChanStatusLocalDataLoss
+		restoredBorked := channeldb.ChanStatusRestored | channeldb.ChanStatusBorked
+
+		// If the channel is restored and has either the local data
+		// loss or borked channel status flags, then the reestablish
+		// dance has already been attempted. We won't load these
+		// channels into the Switch, but we will keep the connection
+		// alive. This is so the user can send an Error to the CLN peer
+		// to close out the connection.
+		if dbChan.HasChanStatus(restoredDataLoss) ||
+			dbChan.HasChanStatus(restoredBorked) {
+
+			// Continue to avoid populating the maps and adding a
+			// link for this channel.
+			p.log.Debugf("Not loading link with ChannelPoint(%v)" +
+				" since it has status restored and either " +
+				"data loss or borked")
+
+			continue
+		}
+
 		// Skip adding any permanently irreconcilable channels to the
 		// htlcswitch.
 		if !dbChan.HasChanStatus(channeldb.ChanStatusDefault) &&

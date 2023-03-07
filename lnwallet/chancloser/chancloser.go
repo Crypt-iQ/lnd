@@ -686,6 +686,15 @@ func (c *ChanCloser) ProcessCloseMsg(msg lnwire.Message) ([]lnwire.Message,
 		chancloserLog.Infof("ChannelPoint(%v): shutdown response received, "+
 			"entering fee negotiation", c.chanPoint)
 
+		if c.isChannelClean() {
+			// If this Shutdown was from the remote peer and the
+			// we have the ChanStatusCoopBroadcasted status, we'll
+			// immediately call MarkChannelClean. This is done in
+			// the case we are restarting the coop close flow and
+			// have previously reached the fee negotiation step.
+			return c.MarkChannelClean()
+		}
+
 		return nil, false, nil
 
 	// If we're receiving a message while we're in the fee negotiation phase,

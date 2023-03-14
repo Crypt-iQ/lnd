@@ -3662,7 +3662,6 @@ func (p *Brontide) handleCloseMsg(msg *closeMsg) {
 	)
 	if err != nil {
 		err := fmt.Errorf("unable to process close msg: %v", err)
-		p.log.Error(err)
 
 		// As the negotiations failed, we'll reset the channel state machine to
 		// ensure we act to on-chain events as normal.
@@ -3672,6 +3671,11 @@ func (p *Brontide) handleCloseMsg(msg *closeMsg) {
 			chanCloser.CloseRequest().Err <- err
 		}
 		delete(p.activeChanCloses, msg.cid)
+
+		// Disconnect since the peer has most likely sent an invalid
+		// close message.
+		p.Disconnect(err)
+
 		return
 	}
 

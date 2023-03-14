@@ -1628,22 +1628,7 @@ out:
 		}
 
 		if isLinkUpdate {
-			// If this is a channel update, then we need to feed it
-			// into the channel's in-order message stream.
-			chanStream, ok := p.activeMsgStreams[targetChan]
-			if !ok {
-				// If a stream hasn't yet been created, then
-				// we'll do so, add it to the map, and finally
-				// start it.
-				chanStream = newChanMsgStream(p, targetChan)
-				p.activeMsgStreams[targetChan] = chanStream
-				chanStream.Start()
-				defer chanStream.Stop()
-			}
-
-			// With the stream obtained, add the message to the
-			// stream so we can continue processing message.
-			chanStream.AddMsg(nextMsg)
+			p.handleLinkUpdate(nextMsg, targetChan)
 		}
 
 		idleTimer.Reset(idleTimeout)
@@ -1652,6 +1637,29 @@ out:
 	p.Disconnect(errors.New("read handler closed"))
 
 	p.log.Trace("readHandler for peer done")
+}
+
+// handleLinkUpdate handles a message that satisfies the LinkUpdater interface
+// by passing it to the appropriate chanMsgStream.
+func (p *Brontide) handleLinkUpdate(nextMsg lnwire.Message,
+	targetChan lnwire.ChannelID) {
+
+	// If this is a channel update, then we need to feed it
+	// into the channel's in-order message stream.
+	chanStream, ok := p.activeMsgStreams[targetChan]
+	if !ok {
+		// If a stream hasn't yet been created, then
+		// we'll do so, add it to the map, and finally
+		// start it.
+		chanStream = newChanMsgStream(p, targetChan)
+		p.activeMsgStreams[targetChan] = chanStream
+		chanStream.Start()
+		defer chanStream.Stop()
+	}
+
+	// With the stream obtained, add the message to the
+	// stream so we can continue processing message.
+	chanStream.AddMsg(nextMsg)
 }
 
 // handleCustomMessage handles the given custom message if a handler is

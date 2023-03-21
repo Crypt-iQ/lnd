@@ -378,9 +378,9 @@ type channelLink struct {
 	// by the HTLC switch.
 	downstream chan *htlcPacket
 
-	// shutdownRequest is a channel that the channelLink will listen on to
-	// service shutdown requests from ShutdownIfChannelClean calls.
-	shutdownRequest chan *shutdownReq
+	// shutdownInit is an atomic bool that is set when the local user wants
+	// to initiate a cooperative close.
+	shutdownInit atomic.Bool
 
 	// shutdownReceived is an atomic bool that is set when we've received a
 	// Shutdown message from the remote peer.
@@ -427,14 +427,13 @@ func NewChannelLink(cfg ChannelLinkConfig,
 	logPrefix := fmt.Sprintf("ChannelLink(%v):", channel.ChannelPoint())
 
 	return &channelLink{
-		cfg:             cfg,
-		channel:         channel,
-		shortChanID:     channel.ShortChanID(),
-		shutdownRequest: make(chan *shutdownReq),
-		hodlMap:         make(map[models.CircuitKey]hodlHtlc),
-		hodlQueue:       queue.NewConcurrentQueue(10),
-		log:             build.NewPrefixLog(logPrefix, log),
-		quit:            make(chan struct{}),
+		cfg:         cfg,
+		channel:     channel,
+		shortChanID: channel.ShortChanID(),
+		hodlMap:     make(map[models.CircuitKey]hodlHtlc),
+		hodlQueue:   queue.NewConcurrentQueue(10),
+		log:         build.NewPrefixLog(logPrefix, log),
+		quit:        make(chan struct{}),
 	}
 }
 
@@ -1283,20 +1282,6 @@ func (l *channelLink) htlcManager() {
 						" %v", err),
 				)
 			}
-
-		case req := <-l.shutdownRequest:
-			// If the channel is clean, we send nil on the err chan
-			// and return to prevent the htlcManager goroutine from
-			// processing any more updates. The full link shutdown
-			// will be triggered by RemoveLink in the peer.
-			if l.channel.IsChannelClean() {
-				req.err <- nil
-				return
-			}
-
-			// Otherwise, the channel has lingering updates, send
-			// an error and continue.
-			req.err <- ErrLinkFailedShutdown
 
 		case <-l.quit:
 			return
@@ -2768,27 +2753,13 @@ func (l *channelLink) HandleChannelUpdate(message lnwire.Message) {
 	l.mailBox.AddMessage(message)
 }
 
-// ShutdownIfChannelClean triggers a link shutdown if the channel is in a clean
-// state and errors if the channel has lingering updates.
+// NotifyLocalShutdown sets the shutdownInit atomic bool. This lets the link
+// know to wind down and trigger an outside subsystem to initiate the
+// cooperative close flow.
 //
 // NOTE: Part of the ChannelUpdateHandler interface.
-func (l *channelLink) ShutdownIfChannelClean() error {
-	errChan := make(chan error, 1)
-
-	select {
-	case l.shutdownRequest <- &shutdownReq{
-		err: errChan,
-	}:
-	case <-l.quit:
-		return ErrLinkShuttingDown
-	}
-
-	select {
-	case err := <-errChan:
-		return err
-	case <-l.quit:
-		return ErrLinkShuttingDown
-	}
+func (l *channelLink) NotifyLocalShutdown() {
+	l.shutdownInit.Store(true)
 }
 
 // updateChannelFee updates the commitment fee-per-kw on this channel by

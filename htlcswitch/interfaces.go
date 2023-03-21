@@ -137,6 +137,17 @@ type ChannelUpdateHandler interface {
 	// clean. This can be used with dynamic commitment negotiation or coop
 	// close negotiation which require a clean channel state.
 	ShutdownIfChannelClean() error
+
+	// SetShutdownSeqNum sets the link's shutdown sequence number. This
+	// ensures that the Shutdown flow can properly be enforced. Without
+	// this function, it's possible that the Shutdown signal received from
+	// an outside subsystem is late rather than on-time or early. If the
+	// signal is late, the Shutdown flow may fail altogether since we may
+	// be incorrectly assuming that our channel peer has violated a BOLT#02
+	// Shutdown requirement when they haven't. When the signal is early,
+	// the link can simply wait until the link's sequence number catches up
+	// to the link's shutdown sequence number.
+	SetShutdownSeqNum(seqnum uint64)
 }
 
 // ChannelLink is an interface which represents the subsystem for managing the

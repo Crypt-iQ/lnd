@@ -475,6 +475,34 @@ type Brontide struct {
 	// potentially holding lots of un-consumed events.
 	channelEventClient *subscribe.Client
 
+	// linkUpdateSeqNums is a map that keeps track of each link's sequence
+	// number. This is done here rather than in the link as the Brontide
+	// has the most up-to-date information. A link's sequence number is
+	// incremented when a LinkUpdater or Shutdown message is received. The
+	// sequence number is used to provide the link with more context about
+	// which message arrived first. This is important during the coop close
+	// flow given the asynchronous nature of the link and the ChanCloser.
+	linkUpdateSeqNums map[lnwire.ChannelID]*atomic.Uint64
+
+	// chanLinksMtx is a mutex that guards the chanLinks and
+	// initShutdownSeqNums map.
+	chanLinksMtx sync.RWMutex
+
+	// chanLinks is a map that keeps track of each ChannelUpdateHandler so
+	// that we can notify it that Shutdown has been received directly from
+	// the readHandler goroutine. This is so that we can guarantee that
+	// this notification is either before prior messages or in the correct
+	// order. If the Shutdown signal were late, the ChannelLink would be
+	// unable to perform any Shutdown checks.
+	chanLinks map[lnwire.ChannelID]htlcswitch.ChannelUpdateHandler
+
+	// initShutdownSeqNums is a map that ensures that if we receive a
+	// retransmitted Shutdown message on startup and the active link event
+	// hasn't been received, we'll still call SetShutdownSeqNum on the
+	// link. This is necessary because handleShutdown will not call
+	// SetShutdownSeqNum.
+	initShutdownSeqNums map[lnwire.ChannelID]uint64
+
 	queueQuit chan struct{}
 	quit      chan struct{}
 	wg        sync.WaitGroup
@@ -506,6 +534,7 @@ func NewBrontide(cfg Config) *Brontide {
 		linkFailures:       make(chan linkFailureReport),
 		chanCloseMsgs:      make(chan *closeMsg),
 		resentChanSyncMsg:  make(map[lnwire.ChannelID]struct{}),
+		linkUpdateSeqNums:  make(map[lnwire.ChannelID]*atomic.Uint64),
 		queueQuit:          make(chan struct{}),
 		quit:               make(chan struct{}),
 		log:                build.NewPrefixLog(logPrefix, peerLog),
@@ -1158,6 +1187,21 @@ func (p *Brontide) readNextMessage() (lnwire.Message, error) {
 	return nextMsg, nil
 }
 
+// sequencedMsg wraps a lnwire.Message and a uint64 that indicates the relative
+// sequence number across the wire for the channel in question.
+type sequencedMsg struct {
+	msg    lnwire.Message
+	seqnum uint64
+}
+
+// createZeroSeqMsg creates a sequencedMsg but sets the seqnum to zero.
+func createZeroSeqMsg(msg lnwire.Message) *sequencedMsg {
+	return &sequencedMsg{
+		msg:    msg,
+		seqnum: 0,
+	}
+}
+
 // msgStream implements a goroutine-safe, in-order stream of messages to be
 // delivered via closure to a receiver. These messages MUST be in order due to
 // the nature of the lightning channel commitment and gossiper state machines.
@@ -1402,6 +1446,20 @@ func newChanMsgStream(p *Brontide, cid lnwire.ChannelID) *msgStream {
 			if chanLink == nil {
 				return
 			}
+
+			// Add the link to the chanLinks map so that we are
+			// able to ensure message ordering during cooperative
+			// closes.
+			p.chanLinksMtx.Lock()
+			p.chanLinks[cid] = chanLink
+			seqnum, ok := p.initShutdownSeqNums[cid]
+			p.chanLinksMtx.Unlock()
+
+			if ok {
+				// If the Shutdown sequence number has been
+				// set, then call SetShutdownSeqNum.
+				chanLink.SetShutdownSeqNum(seqnum)
+			}
 		}
 
 		// In order to avoid unnecessarily delivering message
@@ -1522,8 +1580,9 @@ out:
 		}
 
 		var (
-			targetChan   lnwire.ChannelID
-			isLinkUpdate bool
+			targetChan       lnwire.ChannelID
+			isLinkUpdate     bool
+			updateLinkSeqNum bool
 		)
 
 		switch msg := nextMsg.(type) {
@@ -1555,11 +1614,8 @@ out:
 			p.cfg.FundingManager.ProcessFundingMsg(msg, p)
 
 		case *lnwire.Shutdown:
-			select {
-			case p.chanCloseMsgs <- &closeMsg{msg.ChannelID, msg}:
-			case <-p.quit:
-				break out
-			}
+			p.handleShutdown(msg)
+
 		case *lnwire.ClosingSigned:
 			select {
 			case p.chanCloseMsgs <- &closeMsg{msg.ChannelID, msg}:
@@ -1597,6 +1653,7 @@ out:
 		case LinkUpdater:
 			targetChan = msg.TargetChanID()
 			isLinkUpdate = p.isActiveChannel(targetChan)
+			updateLinkSeqNum = true
 
 		case *lnwire.ChannelUpdate,
 			*lnwire.ChannelAnnouncement,
@@ -1608,7 +1665,9 @@ out:
 			*lnwire.ReplyChannelRange,
 			*lnwire.ReplyShortChanIDsEnd:
 
-			discStream.AddMsg(msg)
+			// We don't need to add a sequence number for gossip
+			// messages.
+			discStream.AddMsg(createZeroSeqMsg(msg))
 
 		case *lnwire.Custom:
 			err := p.handleCustomMessage(msg)
@@ -1628,7 +1687,9 @@ out:
 		}
 
 		if isLinkUpdate {
-			p.handleLinkUpdate(nextMsg, targetChan)
+			p.handleLinkUpdate(
+				nextMsg, targetChan, updateLinkSeqNum,
+			)
 		}
 
 		idleTimer.Reset(idleTimeout)
@@ -1639,10 +1700,74 @@ out:
 	p.log.Trace("readHandler for peer done")
 }
 
+// incrementLinkSeqNum increments a ChannelLink's sequence number from
+// linkUpdateSeqNums.
+// The caller MUST:
+//   - check that the ChannelID is in the activeChannels map
+//   - call this from the readHandler goroutine
+func (p *Brontide) incrementLinkSeqNum(targetChan lnwire.ChannelID) uint64 {
+	var seqnum uint64
+
+	if atomicSeqNum, ok := p.linkUpdateSeqNums[targetChan]; !ok {
+		// The sequence number doesn't exist, so we'll initialize it to
+		// zero.
+		var zeroSeqNum atomic.Uint64
+		p.linkUpdateSeqNums[targetChan] = &zeroSeqNum
+	} else {
+		// Else, the sequence number exists, so we'll increment and
+		// return the new sequence number.
+		seqnum = atomicSeqNum.Add(1)
+	}
+
+	return seqnum
+}
+
+// handleShutdown handles the Shutdown message.
+func (p *Brontide) handleShutdown(msg *lnwire.Shutdown) {
+	// First check the activeChannels map. Even thought this is checked
+	// later when passed to chanCloseMsgs, this is necessary to prevent
+	// populating the sequence number in linkUpdateSeqNums for a link that
+	// doesn't exist. The channel must also not be pending.
+	p.activeChanMtx.RLock()
+	channel, ok := p.activeChannels[msg.ChannelID]
+	p.activeChanMtx.RUnlock()
+
+	if !ok || channel == nil {
+		// The channel doesn't exist or it is pending.
+		return
+	}
+
+	// Increment the link's sequence number.
+	seqnum := p.incrementLinkSeqNum(msg.ChannelID)
+
+	p.chanLinksMtx.Lock()
+	p.initShutdownSeqNums[msg.ChannelID] = seqnum
+	chanLink, ok := p.chanLinks[msg.ChannelID]
+	p.chanLinksMtx.Unlock()
+
+	if !ok {
+		// If the link doesn't exist, return early. In the case that
+		// the link exists, but hasn't sent out the active link event,
+		// the caller of waitUntilLinkActive function will invoke
+		// SetShutdownSeqNum immediately after the link becomes active.
+		return
+	}
+
+	// We set the link's shutdown sequence number so it can properly
+	// enforce the shutdown flow.
+	chanLink.SetShutdownSeqNum(seqnum)
+
+	select {
+	case p.chanCloseMsgs <- &closeMsg{msg.ChannelID, msg}:
+	case <-p.quit:
+	}
+}
+
 // handleLinkUpdate handles a message that satisfies the LinkUpdater interface
-// by passing it to the appropriate chanMsgStream.
+// by passing it to the appropriate chanMsgStream. The updateLinkSeqNum denotes
+// whether we should increment the link's sequence number in our maps.
 func (p *Brontide) handleLinkUpdate(nextMsg lnwire.Message,
-	targetChan lnwire.ChannelID) {
+	targetChan lnwire.ChannelID, updateLinkSeqNum bool) {
 
 	// If this is a channel update, then we need to feed it
 	// into the channel's in-order message stream.
@@ -1657,8 +1782,16 @@ func (p *Brontide) handleLinkUpdate(nextMsg lnwire.Message,
 		defer chanStream.Stop()
 	}
 
-	// With the stream obtained, add the message to the
-	// stream so we can continue processing message.
+	if updateLinkSeqNum {
+		// If updateLinkSeqNum is true, we'll increment the link's
+		// sequence number. The activeChannels map was checked before
+		// handleLinkUpdate was called, so we can safely increment the
+		// link's sequence number. We ignore the return value here
+		// since we are only interested in incrementing the value
+		// stored in the linkUpdateSeqNums map.
+		_ = p.incrementLinkSeqNum(targetChan)
+	}
+
 	chanStream.AddMsg(nextMsg)
 }
 
@@ -1725,7 +1858,9 @@ func (p *Brontide) handleWarning(msg *lnwire.Warning) bool {
 	// channels with this peer.
 	case msg.ChanID == lnwire.ConnectionWideID:
 		for _, chanStream := range p.activeMsgStreams {
-			chanStream.AddMsg(msg)
+			// Warning messages don't need a sequence number since
+			// they don't advance the ChannelLink's state machine.
+			chanStream.AddMsg(createZeroSeqMsg(msg))
 		}
 
 		return false
@@ -1760,7 +1895,9 @@ func (p *Brontide) handleError(msg *lnwire.Error) bool {
 	// all channels with this peer.
 	case msg.ChanID == lnwire.ConnectionWideID:
 		for _, chanStream := range p.activeMsgStreams {
-			chanStream.AddMsg(msg)
+			// Error messages don't need a sequence number since
+			// they don't advance the ChannelLink's state machine.
+			chanStream.AddMsg(createZeroSeqMsg(msg))
 		}
 		return false
 

@@ -402,6 +402,10 @@ type channelLink struct {
 	// resolving those htlcs when we receive a message on hodlQueue.
 	hodlMap map[models.CircuitKey]hodlHtlc
 
+	// shutdownSeqNum is an atomic sequence number that is used to ensure
+	// that the link can enforce certain BOLT#02 Shutdown checks.
+	shutdownSeqNum atomic.Uint64
+
 	// log is a link-specific logging instance.
 	log btclog.Logger
 
@@ -2743,6 +2747,7 @@ func (l *channelLink) handleSwitchPacket(pkt *htlcPacket) error {
 //
 // NOTE: Part of the ChannelLink interface.
 func (l *channelLink) HandleChannelUpdate(message lnwire.Message) {
+
 	select {
 	case <-l.quit:
 		// Return early if the link is already in the process of
@@ -2776,6 +2781,17 @@ func (l *channelLink) ShutdownIfChannelClean() error {
 	case <-l.quit:
 		return ErrLinkShuttingDown
 	}
+}
+
+// SetShutdownSeqNum sets the link's shutdown sequence number.
+//
+// NOTE: Part of the ChannelUpdateHandler interface.
+func (l *channelLink) SetShutdownSeqNum(seqnum uint64) {
+	// Store the seqnum into shutdownSeqNum. If we were to instead set the
+	// shutdownSeqNum in the htlcManager goroutine, we could get a late
+	// shutdown signal. If we get a late shutdown signal, the shutdown flow
+	// may erroneously fail.
+	l.shutdownSeqNum.Store(seqnum)
 }
 
 // updateChannelFee updates the commitment fee-per-kw on this channel by

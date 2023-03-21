@@ -28,7 +28,7 @@ func (l *linkTestContext) sendHtlcBobToAlice(htlc *lnwire.UpdateAddHTLC) {
 		l.t.Fatalf("bob failed adding htlc: %v", err)
 	}
 
-	l.aliceLink.HandleChannelUpdate(htlc)
+	l.aliceLink.HandleChannelUpdate(htlc, 0)
 }
 
 // sendHtlcAliceToBob sends an HTLC from Alice to Bob, by first committing the
@@ -108,7 +108,7 @@ func (l *linkTestContext) sendCommitSigBobToAlice(expHtlcs int) {
 			len(commitSig.HtlcSigs))
 	}
 
-	l.aliceLink.HandleChannelUpdate(commitSig)
+	l.aliceLink.HandleChannelUpdate(commitSig, 0)
 }
 
 // receiveRevAndAckAliceToBob waits for Alice to send a RevAndAck to Bob, then
@@ -184,7 +184,7 @@ func (l *linkTestContext) sendRevAndAckBobToAlice() {
 		l.t.Fatalf("unable to revoke commitment: %v", err)
 	}
 
-	l.aliceLink.HandleChannelUpdate(rev)
+	l.aliceLink.HandleChannelUpdate(rev, 0)
 }
 
 // receiveSettleAliceToBob waits for Alice to send a HTLC settle message to
@@ -229,7 +229,7 @@ func (l *linkTestContext) sendSettleBobToAlice(htlcID uint64,
 		PaymentPreimage: preimage,
 	}
 
-	l.aliceLink.HandleChannelUpdate(settle)
+	l.aliceLink.HandleChannelUpdate(settle, 0)
 }
 
 // receiveSettleAliceToBob waits for Alice to send a HTLC settle message to

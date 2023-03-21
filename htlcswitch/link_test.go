@@ -282,7 +282,7 @@ func TestChannelLinkRevThenSig(t *testing.T) {
 	// <-reestablish--
 	bobReest, err := bobChannel.State().ChanSyncMsg()
 	require.NoError(t, err)
-	ctx.aliceLink.HandleChannelUpdate(bobReest)
+	ctx.aliceLink.HandleChannelUpdate(bobReest, 0)
 
 	// ------rev---->
 	ctx.receiveRevAndAckAliceToBob()
@@ -414,7 +414,7 @@ func TestChannelLinkSigThenRev(t *testing.T) {
 	// <-reestablish--
 	bobReest, err := bobChannel.State().ChanSyncMsg()
 	require.NoError(t, err)
-	ctx.aliceLink.HandleChannelUpdate(bobReest)
+	ctx.aliceLink.HandleChannelUpdate(bobReest, 0)
 
 	// ------add---->
 	ctx.receiveHtlcAliceToBob()
@@ -1964,7 +1964,7 @@ func handleStateUpdate(link *channelLink,
 	if err != nil {
 		return err
 	}
-	link.HandleChannelUpdate(remoteRev)
+	link.HandleChannelUpdate(remoteRev, 0)
 
 	remoteSig, remoteHtlcSigs, _, err := remoteChannel.SignNextCommitment()
 	if err != nil {
@@ -1974,7 +1974,7 @@ func handleStateUpdate(link *channelLink,
 		CommitSig: remoteSig,
 		HtlcSigs:  remoteHtlcSigs,
 	}
-	link.HandleChannelUpdate(commitSig)
+	link.HandleChannelUpdate(commitSig, 0)
 
 	// This should make the link respond with a revocation.
 	select {
@@ -2026,7 +2026,7 @@ func updateState(batchTick chan time.Time, link *channelLink,
 		CommitSig: remoteSig,
 		HtlcSigs:  remoteHtlcSigs,
 	}
-	link.HandleChannelUpdate(commitSig)
+	link.HandleChannelUpdate(commitSig, 0)
 
 	// The link should respond with a revocation + commit sig.
 	var msg lnwire.Message
@@ -2068,7 +2068,7 @@ func updateState(batchTick chan time.Time, link *channelLink,
 	if err != nil {
 		return err
 	}
-	link.HandleChannelUpdate(remoteRev)
+	link.HandleChannelUpdate(remoteRev, 0)
 
 	// Sleep to make sure Alice has handled the remote revocation.
 	time.Sleep(500 * time.Millisecond)
@@ -2193,7 +2193,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 		ID:              0,
 		PaymentPreimage: *invoice.Terms.PaymentPreimage,
 	}
-	aliceLink.HandleChannelUpdate(htlcSettle)
+	aliceLink.HandleChannelUpdate(htlcSettle, 0)
 	time.Sleep(time.Millisecond * 500)
 
 	// Since the settle is not locked in yet, Alice's bandwidth should still
@@ -2267,7 +2267,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 		Reason: lnwire.OpaqueReason(reason),
 	}
 
-	aliceLink.HandleChannelUpdate(failMsg)
+	aliceLink.HandleChannelUpdate(failMsg, 0)
 	time.Sleep(time.Millisecond * 500)
 
 	// Before the Fail gets locked in, the bandwidth should remain unchanged.
@@ -2304,7 +2304,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	htlc.ID = 0
 	_, err = bobChannel.AddHTLC(htlc, nil)
 	require.NoError(t, err, "unable to add htlc")
-	aliceLink.HandleChannelUpdate(htlc)
+	aliceLink.HandleChannelUpdate(htlc, 0)
 
 	// Alice's balance remains unchanged until this HTLC is locked in.
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth-htlcAmt)
@@ -2400,7 +2400,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	htlc.ID = 1
 	_, err = bobChannel.AddHTLC(htlc, nil)
 	require.NoError(t, err, "unable to add htlc")
-	aliceLink.HandleChannelUpdate(htlc)
+	aliceLink.HandleChannelUpdate(htlc, 0)
 	time.Sleep(time.Millisecond * 500)
 
 	// No changes before the HTLC is locked in.
@@ -3251,7 +3251,7 @@ func TestChannelLinkBandwidthChanReserve(t *testing.T) {
 		ID:              bobIndex,
 		PaymentPreimage: *invoice.Terms.PaymentPreimage,
 	}
-	aliceLink.HandleChannelUpdate(htlcSettle)
+	aliceLink.HandleChannelUpdate(htlcSettle, 0)
 	time.Sleep(time.Millisecond * 500)
 
 	// Since the settle is not locked in yet, Alice's bandwidth should still
@@ -5240,7 +5240,7 @@ func TestChannelLinkFail(t *testing.T) {
 				warningMsg := &lnwire.Warning{
 					Data: []byte("random warning"),
 				}
-				c.HandleChannelUpdate(warningMsg)
+				c.HandleChannelUpdate(warningMsg, 0)
 			},
 			false,
 			false,
@@ -5298,7 +5298,7 @@ func TestChannelLinkFail(t *testing.T) {
 					ID:              0,
 					PaymentPreimage: [32]byte{},
 				}
-				c.HandleChannelUpdate(htlcSettle)
+				c.HandleChannelUpdate(htlcSettle, 0)
 			},
 			true,
 			false,
@@ -5337,7 +5337,7 @@ func TestChannelLinkFail(t *testing.T) {
 					HtlcSigs:  htlcSigs[1:],
 				}
 
-				c.HandleChannelUpdate(commitSig)
+				c.HandleChannelUpdate(commitSig, 0)
 			},
 			true,
 			true,
@@ -5380,7 +5380,7 @@ func TestChannelLinkFail(t *testing.T) {
 					HtlcSigs:  htlcSigs,
 				}
 
-				c.HandleChannelUpdate(commitSig)
+				c.HandleChannelUpdate(commitSig, 0)
 			},
 			true,
 			true,
@@ -5395,7 +5395,7 @@ func TestChannelLinkFail(t *testing.T) {
 				remoteChannel *lnwallet.LightningChannel) {
 
 				err := &lnwire.Error{}
-				c.HandleChannelUpdate(err)
+				c.HandleChannelUpdate(err, 0)
 			},
 			true,
 			false,
@@ -6505,7 +6505,7 @@ func TestPipelineSettle(t *testing.T) {
 		ID:              0,
 		PaymentPreimage: *preimage1,
 	}
-	ctx.aliceLink.HandleChannelUpdate(settle1)
+	ctx.aliceLink.HandleChannelUpdate(settle1, 0)
 
 	// ForceClose should be false.
 	select {
@@ -6541,7 +6541,7 @@ func TestPipelineSettle(t *testing.T) {
 		ID:              0,
 		PaymentPreimage: *preimage1,
 	}
-	ctx.aliceLink.HandleChannelUpdate(settle2)
+	ctx.aliceLink.HandleChannelUpdate(settle2, 0)
 
 	// ForceClose should be false.
 	select {
@@ -6590,7 +6590,7 @@ func TestPipelineSettle(t *testing.T) {
 
 	// Bob should now be able to send the settle to Alice without making
 	// the link fail.
-	ctx.aliceLink.HandleChannelUpdate(settle2)
+	ctx.aliceLink.HandleChannelUpdate(settle2, 0)
 
 	select {
 	case <-linkErrors:
@@ -6680,7 +6680,7 @@ func TestChannelLinkShortFailureRelay(t *testing.T) {
 	aliceLink.HandleChannelUpdate(&lnwire.UpdateFailHTLC{
 		ID:     htlcID,
 		Reason: shortReason,
-	})
+	}, 0)
 
 	ctx.sendCommitSigBobToAlice(0)
 	ctx.receiveRevAndAckAliceToBob()

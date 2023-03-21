@@ -382,6 +382,10 @@ type channelLink struct {
 	// service shutdown requests from ShutdownIfChannelClean calls.
 	shutdownRequest chan *shutdownReq
 
+	// shutdownReceived is an atomic bool that is set when we've received a
+	// Shutdown message from the remote peer.
+	shutdownReceived atomic.Bool
+
 	// updateFeeTimer is the timer responsible for updating the link's
 	// commitment fee every time it fires.
 	updateFeeTimer *time.Timer
@@ -2144,6 +2148,15 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			"ChannelPoint(%v): received error from peer: %v",
 			l.channel.ChannelPoint(), msg.Error(),
 		)
+
+	case *lnwire.Shutdown:
+		// The remote peer wants to cooperatively close the channel.
+		// The link only uses this message to determine when to signal
+		// to outside subsystems when they should send out Shutdown and
+		// ClosingSigned. We don't check if there are any pending
+		// channel updates from the peer here in order to be lenient.
+		l.shutdownReceived.Store(true)
+
 	default:
 		l.log.Warnf("received unknown message of type %T", msg)
 	}

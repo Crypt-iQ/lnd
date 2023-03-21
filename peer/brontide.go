@@ -1560,6 +1560,11 @@ out:
 			case <-p.quit:
 				break out
 			}
+
+			// Pass the Shutdown message to the link.
+			targetChan = msg.ChannelID
+			isLinkUpdate = p.isActiveChannel(msg.ChannelID)
+
 		case *lnwire.ClosingSigned:
 			select {
 			case p.chanCloseMsgs <- &closeMsg{msg.ChannelID, msg}:

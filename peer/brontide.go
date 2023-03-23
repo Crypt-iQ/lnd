@@ -2989,6 +2989,13 @@ func (p *Brontide) handleLocalCloseReq(req *htlcswitch.ChanClose) {
 	// out this channel on-chain, so we execute the cooperative channel
 	// closure workflow.
 	case contractcourt.CloseRegular:
+
+		// TODO: if already exists... handle that?
+		// Switch will notify link
+
+		// Link needs to notify when OK to send Shutdown (not handled yet)
+		// Link needs to notify when OK to send ready (that's in HandleCoopReady)
+
 		// First, we'll choose a delivery address that we'll use to send the
 		// funds to in the case of a successful negotiation.
 

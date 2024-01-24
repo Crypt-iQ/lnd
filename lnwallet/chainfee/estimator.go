@@ -150,6 +150,11 @@ type BtcdEstimator struct {
 	minFeeManager *minFeeManager
 
 	btcdConn *rpcclient.Client
+
+	// filterManager uses our peer's feefilter values to determine a
+	// suitable feerate to use that will allow successful transaction
+	// propagation.
+	filterManager *filterManager
 }
 
 // NewBtcdEstimator creates a new BtcdEstimator given a fully populated
@@ -167,9 +172,14 @@ func NewBtcdEstimator(rpcConfig rpcclient.ConnConfig,
 		return nil, err
 	}
 
+	fetchCb := func() ([]SatPerKWeight, error) {
+		return fetchBtcdFilters(chainConn)
+	}
+
 	return &BtcdEstimator{
 		fallbackFeePerKW: fallBackFeeRate,
 		btcdConn:         chainConn,
+		filterManager:    newFilterManager(fetchCb),
 	}, nil
 }
 
@@ -192,6 +202,8 @@ func (b *BtcdEstimator) Start() error {
 		return err
 	}
 	b.minFeeManager = minRelayFeeManager
+
+	b.filterManager.Start()
 
 	return nil
 }
@@ -219,6 +231,8 @@ func (b *BtcdEstimator) fetchMinRelayFee() (SatPerKWeight, error) {
 //
 // NOTE: This method is part of the Estimator interface.
 func (b *BtcdEstimator) Stop() error {
+	b.filterManager.Stop()
+
 	b.btcdConn.Shutdown()
 
 	return nil
@@ -250,7 +264,11 @@ func (b *BtcdEstimator) EstimateFeePerKW(numBlocks uint32) (SatPerKWeight, error
 //
 // NOTE: This method is part of the Estimator interface.
 func (b *BtcdEstimator) RelayFeePerKW() SatPerKWeight {
-	return b.minFeeManager.fetchMinFee()
+	// Compare the minimum relay fee against the filterManager's suggested
+	// feerate and return the higher of the two.
+	minFee := b.minFeeManager.fetchMinFee()
+
+	return b.filterManager.chooseMinFee(minFee)
 }
 
 // fetchEstimate returns a fee estimate for a transaction to be confirmed in
@@ -273,12 +291,18 @@ func (b *BtcdEstimator) fetchEstimate(confTarget uint32) (SatPerKWeight, error) 
 	// estimated fee rate from its sat/kb representation to sat/kw.
 	satPerKw := SatPerKVByte(satPerKB).FeePerKWeight()
 
-	// Finally, we'll enforce our fee floor.
-	if satPerKw < b.minFeeManager.fetchMinFee() {
+	// Finally, we'll enforce our fee floor by choosing the higher of the
+	// minimum relay fee and the feerate returned by the filterManager.
+	minFee := b.minFeeManager.fetchMinFee()
+
+	absoluteMinFee := b.filterManager.chooseMinFee(minFee)
+
+	if satPerKw < absoluteMinFee {
 		log.Debugf("Estimated fee rate of %v sat/kw is too low, "+
 			"using fee floor of %v sat/kw instead", satPerKw,
-			b.minFeeManager)
-		satPerKw = b.minFeeManager.fetchMinFee()
+			absoluteMinFee)
+
+		satPerKw = absoluteMinFee
 	}
 
 	log.Debugf("Returning %v sat/kw for conf target of %v",
@@ -312,6 +336,11 @@ type BitcoindEstimator struct {
 	feeMode string
 
 	bitcoindConn *rpcclient.Client
+
+	// filterManager uses our peer's feefilter values to determine a
+	// suitable feerate to use that will allow successful transaction
+	// propagation.
+	filterManager *filterManager
 }
 
 // NewBitcoindEstimator creates a new BitcoindEstimator given a fully populated
@@ -331,10 +360,15 @@ func NewBitcoindEstimator(rpcConfig rpcclient.ConnConfig, feeMode string,
 		return nil, err
 	}
 
+	fetchCb := func() ([]SatPerKWeight, error) {
+		return fetchBitcoindFilters(chainConn)
+	}
+
 	return &BitcoindEstimator{
 		fallbackFeePerKW: fallBackFeeRate,
 		bitcoindConn:     chainConn,
 		feeMode:          feeMode,
+		filterManager:    newFilterManager(fetchCb),
 	}, nil
 }
 
@@ -354,6 +388,8 @@ func (b *BitcoindEstimator) Start() error {
 		return err
 	}
 	b.minFeeManager = relayFeeManager
+
+	b.filterManager.Start()
 
 	return nil
 }
@@ -392,6 +428,7 @@ func (b *BitcoindEstimator) fetchMinMempoolFee() (SatPerKWeight, error) {
 //
 // NOTE: This method is part of the Estimator interface.
 func (b *BitcoindEstimator) Stop() error {
+	b.filterManager.Stop()
 	return nil
 }
 
@@ -430,7 +467,11 @@ func (b *BitcoindEstimator) EstimateFeePerKW(
 //
 // NOTE: This method is part of the Estimator interface.
 func (b *BitcoindEstimator) RelayFeePerKW() SatPerKWeight {
-	return b.minFeeManager.fetchMinFee()
+	// Compare the minimum relay fee against the filterManager's suggested
+	// feerate and return the higher of the two.
+	minFee := b.minFeeManager.fetchMinFee()
+
+	return b.filterManager.chooseMinFee(minFee)
 }
 
 // fetchEstimate returns a fee estimate for a transaction to be confirmed in
@@ -476,14 +517,18 @@ func (b *BitcoindEstimator) fetchEstimate(confTarget uint32) (SatPerKWeight, err
 	// estimated fee rate from its sat/kb representation to sat/kw.
 	satPerKw := SatPerKVByte(satPerKB).FeePerKWeight()
 
-	// Finally, we'll enforce our fee floor.
-	minRelayFee := b.minFeeManager.fetchMinFee()
-	if satPerKw < minRelayFee {
+	// Finally, we'll enforce our fee floor by choosing the higher of the
+	// minimum relay fee and the feerate returned by the filterManager.
+	minFee := b.minFeeManager.fetchMinFee()
+
+	absoluteMinFee := b.filterManager.chooseMinFee(minFee)
+
+	if satPerKw < absoluteMinFee {
 		log.Debugf("Estimated fee rate of %v sat/kw is too low, "+
 			"using fee floor of %v sat/kw instead", satPerKw,
-			minRelayFee)
+			absoluteMinFee)
 
-		satPerKw = minRelayFee
+		satPerKw = absoluteMinFee
 	}
 
 	log.Debugf("Returning %v sat/kw for conf target of %v",

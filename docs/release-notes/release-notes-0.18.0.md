@@ -142,6 +142,9 @@
   funding operations and the new `PsbtCoinSelect` option of the `FundPsbt`
   RPC](https://github.com/lightningnetwork/lnd/pull/8378).
 
+* When computing a minimum fee for transaction construction, `lnd` [now takes our
+bitcoin peers' feefilter values into account](https://github.com/lightningnetwork/lnd/pull/8418).
+
 ## RPC Additions
 
 * [Deprecated](https://github.com/lightningnetwork/lnd/pull/7175)

@@ -97,13 +97,9 @@ func (f *filterManager) FetchMedianFilter() (SatPerKWeight, error) {
 	f.medianMtx.RLock()
 	defer f.medianMtx.RUnlock()
 
-	if f.median.IsNone() {
-		// Return errNoFilters so the caller knows to ignore this
-		// output and continue.
-		return 0, errNoData
-	}
-
-	return f.median.UnsafeFromSome(), nil
+	// If there is no median, return errNoData so the caller knows to
+	// ignore the output and continue.
+	return f.median.UnwrapOrErr(errNoData)
 }
 
 type bitcoindPeerInfoResp struct {
@@ -213,9 +209,10 @@ func (f *filterManager) updateMedian(feeFilters []SatPerKWeight) {
 	defer f.medianMtx.Unlock()
 
 	// Log the new median.
-	f.median = fn.Some(med(feeFilters))
+	median := med(feeFilters)
+	f.median = fn.Some(median)
 	log.Debugf("filterManager updated moving median to: %v",
-		f.median.UnsafeFromSome().FeePerKVByte())
+		median.FeePerKVByte())
 }
 
 // isWithinBounds returns false if the filter is unusable and true if it is.

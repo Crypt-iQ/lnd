@@ -2671,6 +2671,7 @@ func (d *AuthenticatedGossiper) handleChanAnnouncement(nMsg *networkMsg,
 			log.Errorf("failed to add edge for local channel: %v",
 				err)
 			nMsg.err <- err
+
 			return nil, false
 		}
 
@@ -2678,7 +2679,7 @@ func (d *AuthenticatedGossiper) handleChanAnnouncement(nMsg *networkMsg,
 		// the IsBanned check first to not incur the cost of a db
 		// lookup.
 		if d.IsBanned(nMsg.peer.PubKey()) {
-			chanPeer, dbErr := d.isChannelPeer(
+			chanPeer, dbErr := d.IsChannelPeer(
 				nMsg.peer.IdentityKey(),
 			)
 			if dbErr != nil {
@@ -3507,9 +3508,9 @@ func (d *AuthenticatedGossiper) IsBanned(pubkey [33]byte) bool {
 	return d.banman.isBanned(pubkey)
 }
 
-// isChannelPeer returns true if the peer denoted by pubkey is one we have a
+// IsChannelPeer returns true if the peer denoted by pubkey is one we have a
 // channel peer.
-func (d *AuthenticatedGossiper) isChannelPeer(pubkey *btcec.PublicKey) (bool,
+func (d *AuthenticatedGossiper) IsChannelPeer(pubkey *btcec.PublicKey) (bool,
 	error) {
 
 	chanPeer, err := d.cfg.ScidCloser.IsChannelPeer(pubkey)
